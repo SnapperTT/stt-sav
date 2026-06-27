@@ -1,0 +1,395 @@
+#hdr
+namespace sttSav {
+struct bvConstants {
+	static constexpr uint8_t BV_EMPTY = 0;
+	static constexpr uint8_t BV_BOOL = 1;
+static constexpr uint8_t BV_NUMBERS_START = 2;
+	static constexpr uint8_t BV_FLOAT = 2;
+	static constexpr uint8_t BV_DOUBLE = 3;
+	static constexpr uint8_t BV_UINT8 = 4;
+	static constexpr uint8_t BV_UINT16 = 5;
+	static constexpr uint8_t BV_UINT32 = 6;
+	static constexpr uint8_t BV_UINT64 = 7;
+	static constexpr uint8_t BV_INT8 = 8;
+	static constexpr uint8_t BV_INT16 = 9;
+	static constexpr uint8_t BV_INT32 = 10;
+	static constexpr uint8_t BV_INT64 = 11;
+static constexpr uint8_t BV_NUMBERS_END = 11;
+	static constexpr uint8_t BV_STRING = 12;
+	static constexpr uint8_t BV_OBJECT = 13;
+	static constexpr uint8_t BV_ARRAY = 14;
+	};
+}
+#end
+
+#src
+
+#end
+
+
+namespace sttSav {
+	
+class BinaryValue {
+public:
+	// Mirrors a subsest of the rapidJson value api.
+	// You must create a StringDecoder and bind it to dec
+    StringDecoder *dec;
+    uint64_t offset; // where in dec is this value?
+public:
+
+    inline BinaryValue() : dec(NULL), offset(0) {}
+
+protected:
+	// helpers
+	inline uint8_t getBvType() const {
+		return dec->buff[offset];
+		}
+
+	inline uint64_t payloadOffset() const {
+		return offset + 1;
+		}
+
+	inline uint32_t getJumpSize() const {
+		uint32_t v;
+		dec->parseAt(payloadOffset(), v);
+		return v;
+		}
+
+	inline uint32_t getMemberCount() const {
+		uint32_t v;
+		dec->parseAt(payloadOffset() + sizeof(uint32_t), v);
+		return v;
+		}
+
+	inline uint64_t childOffset() const {
+		return payloadOffset() + sizeof(uint32_t) * 2;
+		}
+
+	inline uint64_t nextOffset() const {
+		switch (getBvType()) {
+			case bvConstants::BV_BOOL:
+			case bvConstants::BV_UINT8:
+			case bvConstants::BV_INT8:
+				return offset + 2;
+
+			case bvConstants::BV_UINT16:
+			case bvConstants::BV_INT16:
+				return offset + 3;
+
+			case bvConstants::BV_FLOAT:
+			case bvConstants::BV_UINT32:
+			case bvConstants::BV_INT32:
+				return offset + 5;
+
+			case bvConstants::BV_DOUBLE:
+			case bvConstants::BV_UINT64:
+			case bvConstants::BV_INT64:
+				return offset + 9;
+
+			case bvConstants::BV_STRING: {
+				StringDecoder d(*dec);
+				d.seek = payloadOffset();
+				uint64_t sz = d.parseSize();
+				return d.seek + sz;
+				}
+
+			case bvConstants::BV_ARRAY:
+			case bvConstants::BV_OBJECT:
+				return offset + getJumpSize();
+
+			default:
+				STTSAV_ASSERT(false);
+				return offset;
+			}
+		}
+
+public:
+	inline bool IsArray() const {
+		return getBvType() == bvConstants::BV_ARRAY;
+		}
+
+	inline bool IsObject() const {
+		return getBvType() == bvConstants::BV_OBJECT;
+		}
+
+	inline bool IsString() const {
+		return getBvType() == bvConstants::BV_STRING;
+		}
+
+	inline bool IsBool() const {
+		return getBvType() == bvConstants::BV_BOOL;
+		}
+
+	inline bool IsNumber() const {
+		const uint8_t t = getBvType();
+		return t >= bvConstants::BV_NUMBERS_START && t <= bvConstants::BV_NUMBERS_END;
+		}
+
+	inline uint32_t Size() const {
+		return getMemberCount();
+		}
+		
+	inline int GetInt() const {
+		return GetInt32();
+		}
+
+	inline uint32_t GetUint() const {
+		return GetUint32();
+		}
+		
+	inline int32_t GetInt32() const {
+		int32_t v;
+		dec->parseAt(payloadOffset(), v);
+		return v;
+		}
+
+	inline uint32_t GetUint32() const {
+		uint32_t v;
+		dec->parseAt(payloadOffset(), v);
+		return v;
+		}
+		
+	inline int64_t GetInt64() const {
+		int64_t v;
+		dec->parseAt(payloadOffset(), v);
+		return v;
+		}
+
+	inline uint64_t GetUint64() const {
+		uint64_t v;
+		dec->parseAt(payloadOffset(), v);
+		return v;
+		}
+
+	inline float GetFloat() const {
+		float v;
+		dec->parseAt(payloadOffset(), v);
+		return v;
+		}
+
+	inline double GetDouble() const {
+		double v;
+		dec->parseAt(payloadOffset(), v);
+		return v;
+		}
+
+	inline bool GetBool() const {
+		uint8_t v;
+		dec->parseAt(payloadOffset(), v);
+		return v != 0;
+		}
+
+	STTSAV_STRING GetString() const {
+		STTSAV_STRING out;
+		GetStringRef(out);
+		return out;
+		}
+		
+	void GetStringRef(STTSAV_STRING& out) const {
+		StringDecoder d(*dec);
+		d.seek = payloadOffset();
+		d.parseString(out);
+		}
+
+	inline uint32_t GetStringLength() const {
+		StringDecoder d(*dec);
+		d.seek = payloadOffset();
+		return (uint32_t)d.parseSize();
+		}
+	
+	BinaryValue operator[](uint32_t index) {
+		STTSAV_ASSERT(IsArray());
+		STTSAV_ASSERT(index < Size());
+
+		uint64_t off = childOffset();
+
+		for (uint32_t i = 0; i < index; ++i) {
+			BinaryValue v;
+			v.dec = dec;
+			v.offset = off;
+			off = v.nextOffset();
+			}
+
+		BinaryValue out;
+		out.dec = dec;
+		out.offset = off;
+		return out;
+		}
+		
+	BinaryValue operator[](const char *key) {
+		STTSAV_ASSERT(IsObject());
+		
+		uint64_t off = childOffset();
+		for (uint32_t i = 0; i < Size(); ++i) {
+			StringDecoder d(*dec);
+			d.seek = off;
+			
+			STTSAV_STRING name;
+			d.parseString(name);
+
+			if (name == key) {
+				BinaryValue out;
+				out.dec = dec;
+				out.offset = d.seek;
+				return out;
+				}
+			
+			BinaryValue v;
+			v.dec = dec;
+			v.offset = d.seek;
+			off = v.nextOffset();
+			}
+		return BinaryValue();
+		}
+	};
+
+
+// ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+class BinaryWriter {
+public:
+	// Mirrors a subset the rapidJson writer api
+	// You must create a StringEncoder and bind it to enc before using
+	StringEncoder *enc;
+	
+protected:
+	struct scope {
+		uint64_t startOffset;
+		uint32_t memberCount;
+		bool isObject;
+		};
+	STT_SAV_VECTOR<scope> stack;
+
+public:
+	inline BinaryWriter() : enc(NULL) {}
+
+protected:
+	inline void onValueWritten() {
+		if (!stack.empty() && !stack.back().isObject)
+			stack.back().memberCount++;
+		}
+
+	inline void startContainer(const uint8_t bvType, const bool isObject) {
+		onValueWritten();
+
+		scope s;
+		s.startOffset = enc->getSeek();
+		s.memberCount = 0;
+		s.isObject = isObject;
+		stack.push_back(s);
+
+		enc->parse<uint8_t>(bvType);
+		enc->parse<uint32_t>(0); // Jump placeholder
+		enc->parse<uint32_t>(0); // Member count placeholder
+		}
+
+	inline void endContainer() {
+		STTSAV_ASSERT(!stack.empty());
+
+		const scope s = stack.back();
+		stack.pop_back();
+
+		const uint32_t jump = uint32_t(enc->getSeek() - s.startOffset);
+
+		enc->parseAt<uint32_t>(s.startOffset + 1, jump);
+		enc->parseAt<uint32_t>(s.startOffset + 5, s.memberCount);
+		}
+
+	template <typename T>
+	inline void writePrimitive(const uint8_t bvType, const T value) {
+		onValueWritten();
+		enc->parse<uint8_t>(bvType);
+		enc->parse<T>(value);
+		}
+
+public:
+	inline void StartObject() {
+		startContainer(bvConstants::BV_OBJECT, true);
+		}
+
+	inline void StartArray() {
+		startContainer(bvConstants::BV_ARRAY, false);
+		}
+
+	inline void EndObject() {
+		STTSAV_ASSERT(!stack.empty());
+		STTSAV_ASSERT(stack.back().isObject);
+		endContainer();
+		}
+
+	inline void EndArray() {
+		STTSAV_ASSERT(!stack.empty());
+		STTSAV_ASSERT(!stack.back().isObject);
+		endContainer();
+		}
+
+	inline void Key(const char *str) {
+		STTSAV_ASSERT(!stack.empty());
+		STTSAV_ASSERT(stack.back().isObject);
+		stack.back().memberCount++;
+		enc->parseString(str, strlen(str));
+		}
+
+	inline void Int(const int v) { Int32(v); }
+	
+	inline void Int8(const int8_t v) {
+		writePrimitive<int8_t>(bvConstants::BV_INT8, v);
+		}
+
+	inline void Int16(const int16_t v) {
+		writePrimitive<int16_t>(bvConstants::BV_INT16, v);
+		}
+
+	inline void Int32(const int32_t v) {
+		writePrimitive<int32_t>(bvConstants::BV_INT32, v);
+		}
+
+	inline void Int64(const int64_t v) {
+		writePrimitive<int64_t>(bvConstants::BV_INT64, v);
+		}
+
+	inline void Uint(const unsigned v) { Uint32(v); }
+
+	inline void Uint8(const uint8_t v) {
+		writePrimitive<uint8_t>(bvConstants::BV_UINT8, v);
+		}
+
+	inline void Uint16(const uint16_t v) {
+		writePrimitive<uint16_t>(bvConstants::BV_UINT16, v);
+		}
+
+	inline void Uint32(const uint32_t v) {
+		writePrimitive<uint32_t>(bvConstants::BV_UINT32, v);
+		}
+
+	inline void Uint64(const uint64_t v) {
+		writePrimitive<uint64_t>(bvConstants::BV_UINT64, v);
+		}
+
+	inline void Float(const float v) {
+		writePrimitive<float>(bvConstants::BV_FLOAT, v);
+		}
+
+	inline void Double(const double v) {
+		writePrimitive<double>(bvConstants::BV_DOUBLE, v);
+		}
+
+	inline void Bool(const bool v) {
+		writePrimitive<uint8_t>(bvConstants::BV_BOOL, v ? 1 : 0);
+		}
+
+	inline void String(const char *str, const uint32_t len) {
+		onValueWritten();
+		enc->parse<uint8_t>(bvConstants::BV_STRING);
+		enc->parseString(str, len);
+		}
+		
+	inline void String(const char *str) {
+		return String(str, strlen(str));
+		}
+		
+	inline void String(const STTSAV_STRING &str) {
+		return String(str.data(), str.size());
+		}
+	}
+}

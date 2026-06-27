@@ -1,0 +1,109 @@
+// Handles low-level string serialisation
+
+namespace sttSav {
+
+class StringEncoder {
+public:
+	STTSAV_STRING& buff;
+	
+	inline StringEncoder(STTSAV_STRING& storage) : buff(storage) {}
+	
+	inline void reserve(const uint32_t initialCapacity) {
+		buff.reserve(initialCapacity);
+		}
+	inline uint64_t getSeek() const { return buff.size(); }
+	
+	template <typename T>
+	inline void parse(const T & t) {
+		buff += std::string_view((char*)&t, sizeof(T));
+		}
+		
+	template<typename T>
+	inline void parseAt(const uint64_t offset, const T& value) {
+		memcpy(&buff[offset], &value, sizeof(T));
+		}
+	
+	inline void parseSize(const uint64_t trueSize) {
+		if (trueSize >= uint8_t(-1)) {
+			parse<uint8_t>(-1);
+			parse<uint64_t>(trueSize);
+			}
+		else
+			parse<uint8_t>(trueSize);
+		}
+		
+	void parseString(const STTSAV_STRING & str) {
+		parseSize(str.size());
+		buff += str;
+		}
+		
+	void parseString(const char* str, const uint32_t sz) {
+		parseSize(sz);
+		buff += str;
+		}
+	};
+	
+
+class StringDecoder {
+public:
+	// Deserialises an object without throw/catch
+	// You must check `isOk()` to see if we have an error
+	const STTSAV_STRING & buff;
+	uint64_t seek;
+	bool hasError;
+	
+	inline StringDecoder(const STTSAV_STRING & _src) : buff(_src), seek(0), hasError(false) {}
+		
+	inline bool isOk() const { return !hasError; }
+	
+	void onBufferOverflow(const uint64_t read) {
+		printf("stt-sav buffer overflow! read %i at %i of string size %i\n", (int)read, (int)seek, (int)buff.size());
+		}
+	
+	inline bool checkError2(const uint64_t read) {
+		if (hasError) return true;
+		if (read + seek > buff.size()) {
+			onBufferOverflow(read);
+			hasError = true;
+			}
+		return hasError;
+		}
+	
+	// Basic deserialise
+	template <typename T>	
+	inline void parse(T & tout) {
+		if (checkError2(sizeof(T))) return;
+		buff.copy((char *) &tout, sizeof(T), seek);
+		seek += sizeof(T);
+		}
+		
+	template <typename T>	
+	inline T parse() {
+		if (checkError2(sizeof(T))) return T();
+		T tout;
+		buff.copy((char *) &tout, sizeof(T), seek);
+		seek += sizeof(T);
+		return tout;
+		}
+	
+	template<typename T>
+	inline void parseAt(uint64_t offset, T& tout) const {
+		buff.copy((char *) &tout, sizeof(T), offset);
+		}
+		
+	// String
+	inline void parseString(STTSAV_STRING& out) {
+		uint64_t sz = parseSize();
+		seek += sz;
+		out = buff.substr(seek-sz, sz);
+		}
+		
+	inline uint64_t parseSize() {
+		uint64_t sz = parse<uint8_t>();
+		if (sz == uint8_t(-1))
+			sz = parse<uint64_t>();
+		return sz;
+		}
+	};
+	
+} // namespace sttSav

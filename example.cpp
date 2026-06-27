@@ -26,6 +26,7 @@ int main (int argc, char * * argv);
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 using std::printf;
 
 #define STT_SAV_STRING std::string
