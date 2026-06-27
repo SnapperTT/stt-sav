@@ -1,0 +1,27 @@
+#hdr
+#end
+
+#src
+#end
+
+namespace sttSav {
+
+struct splitBucket {
+	// Used for splitting archives in dictionaries
+	uint32_t value;
+	uint32_t bytes;
+	inline splitBucket() { value = 0; bytes = 0; }
+	inline splitBucket(const uint32_t _value, const uint32_t _bytes) { value = _value; bytes = _bytes; }
+	inline bool operator < (const splitBucket & other) const { return bytes < other.bytes; }
+	static void appendOrInsert(STTSAV_VECTOR<splitBucket>& buckets, const uint32_t _value, const uint32_t _bytes) {
+		for (splitBucket& b : buckets) {
+			if (b.value == _value) {
+				b.bytes += _bytes;
+				return;
+				}
+			}
+		buckets.push_back(splitBucket(_value, _bytes));
+		}
+	};
+
+} // namespace sttSav

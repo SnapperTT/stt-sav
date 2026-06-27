@@ -1,0 +1,280 @@
+#hdr
+// Header file
+#ifndef STTSAV_STRING
+	#define STTSAV_STRING std::string
+#endif
+#ifndef STTSAV_VECTOR
+	#define STTSAV_VECTOR std::vector
+#endif
+namespace sttSav {
+struct archiveId { uint32_t value; };
+struct recordId  { uint32_t value; };
+struct archiveKey { uint32_t value; };
+
+struct recordInfo {
+	archiveKey key;
+	recordId record;
+	uint32_t offset;
+	uint32_t length;
+	};
+struct splitResult {
+    archiveId aid;
+    uint32_t size;
+	};
+
+class ArchiveDictionaryI {
+public:
+	/// Archive dictionary interface
+	///
+	/// An ArchiveDictionaryI maps application-defined archive keys to archive IDs.
+	/// The dictionary is responsible for generating archive keys and determining
+	/// which archive owns a particular key. It contains no file I/O logic and is
+	/// independent of the archive storage format.
+	///
+	/// Different applications may implement different dictionary strategies
+	/// (planetary quadtree, fixed grid, hash table, etc.) while sharing the same
+	/// archive storage engine.
+	
+	inline ArchiveDictionaryI() {}
+	virtual ~ArchiveDictionaryI() {}
+	
+	//archiveKey buildKey(...) // <-- you should have some kind of buildKey function per dictionary
+	virtual archiveId getArchiveId(const archiveKey key) const = 0;
+	
+	// Fast lookup of archives from a shortlist produced with splitArchive. Falls back to getArchiveId
+	virtual archiveId getArchiveIdFromShortlist(const archiveKey key, const splitResult* resultsIn, const uint32_t numResults) const { return getArchiveId(key); }
+	
+	// Returns a name of an archive
+	virtual void getArchiveFilename(const archiveId id, char* nameOut, uint32_t& lenOut, const uint32_t maxLen) const {
+		lenOut = snprintf(nameOut, maxLen, "archive%i.sav", (int) id.value);
+		}
+	
+	// Splits an archive into 
+	// RETURNS
+	// - a list of children archives that should hold all of the records within archiveId id. This may or may not contain archiveId
+	// - numChildrenOut - the number of children returned
+	// - splitInfoOut - the kind of split that was perfomed. You can use getArchiveIdFromShortlist with this value to accelerte lookup of archives from keys 
+	// bool - if a split happened or not
+	virtual bool splitArchive(const archiveId id, const STTSAV_VECTOR<recordInfo>& records, const uint32_t maxArchiveSize, splitResult* resultsOut, uint32_t& numResultsOut, const uint32_t maxChildrenOut) = 0;
+	
+	// For a given archive determine what other archives can be combined according to this dictionary's topology
+	// Returns false if there is no legal merge possible
+	virtual bool getMergeCandidates(const archiveId id, archiveId* archivesOut, uint32_t& numArchivesOut, const uint32_t maxArchivesOut) const = 0;
+	
+	// Commits the merge in the dictionary, from the list provided by getMergeCandidates
+	virtual bool mergeArchives(const archiveId* archives, const uint32_t numArchives) = 0;
+	
+	};
+	
+struct transactionMode {
+	constexpr static uint8_t TM_UNKOWN = 0;
+	constexpr static uint8_t TM_LOAD = 1;
+	constexpr static uint8_t TM_SAVE = 2;
+	constexpr static uint8_t TM_DELETE  = 3;
+	constexpr static uint8_t TM_COMPACT = 4;
+	constexpr static uint8_t TM_SPLIT = 5;
+	constexpr static uint8_t TM_JOIN  = 6;
+	constexpr static uint8_t TM_count  = 7;
+	};
+} // namespace sttSav
+#end
+
+#src
+// Implmentation file
+#end
+
+// Common implementation
+namespace sttSav {
+
+struct buffer {
+	// string view for writing
+	const uint8_t* data;
+	uint32_t len;
+	
+	inline buffer() {}
+	inline buffer(const char* _buff, const uint32_t _len) : data((const uint8_t*)_buff), len(_len) {}
+	};
+		
+struct transaction {
+	/// Describes a single archive operation.
+	///
+	/// Transactions are passed to ArchiveManager::doTransactions(), which may
+	/// process multiple transactions as a batch. This allows operations targeting
+	/// the same archive to be grouped together, minimizing file opens, seeks and
+	/// writes but still ensuring the correct order per file.
+	///
+	/// A transaction may represent loading, saving, deleting a record, or archive
+	/// maintenance operations such as compaction, splitting or joining. Results
+	/// are returned by updating the transaction object (for example, success
+	/// status or loaded data).
+	archiveKey mKey;
+	recordId mRecord;
+	uint8_t mode;// transactionMode::TM_*
+	buffer mBufferOut;
+	STTSAV_STRING* stringOut;
+	bool forceOperation; // for split/join/compact, force
+	bool success;
+	
+	inline void initToZero() {
+		mKey.value = 0;
+		mRecord.value = 0;
+		mode = transactionMode::TM_UNKOWN;
+		mBufferOut.data = 0;
+		mBufferOut.len = 0;
+		stringOut = NULL;
+		forceOperation = false;
+		success = false;
+		}
+	inline static transaction makeLoad(const archiveKey _mKey, const recordId _mRecord, STTSAV_STRING& out) {
+		transaction r; r.initToZero();
+		r.mKey = _mKey;
+		r.mRecord = _mRecord;
+		r.mode = transactionMode::TM_LOAD;
+		r.stringOut = &out;
+		return r;
+		}
+	inline static transaction makeSave(const archiveKey _mKey, const recordId _mRecord, const char* buff, const uint32_t len) {
+		return makeSave(_mKey, _mRecord, buffer(buff, len));
+		}
+	inline static transaction makeSave(const archiveKey _mKey, const recordId _mRecord, const buffer _buff) {
+		transaction r; r.initToZero();
+		r.mKey = _mKey;
+		r.mRecord = _mRecord;
+		r.mode = transactionMode::TM_SAVE;
+		r.mBufferOut = _buff;
+		return r;
+		}
+	inline static transaction makeDelete(const archiveKey _mKey, const recordId _mRecord) {
+		transaction r; r.initToZero();
+		r.mKey = _mKey;
+		r.mRecord = _mRecord;
+		r.mode = transactionMode::TM_DELETE;
+		return r;
+		}
+	inline static transaction makeCompact(const archiveKey _mKey, const bool forceCompact) {
+		transaction r; r.initToZero();
+		r.mKey = _mKey;
+		r.mode = transactionMode::TM_COMPACT;
+		r.forceOperation = forceCompact;
+		return r;
+		}
+	inline static transaction makeSplit(const archiveKey _mKey, const bool forceSplit) {
+		transaction r; r.initToZero();
+		r.mKey = _mKey;
+		r.mode = transactionMode::TM_SPLIT;
+		r.forceOperation = forceSplit;
+		return r;
+		}
+	inline static transaction makeJoin(const archiveKey _mKey, const bool forceJoin) {
+		transaction r; r.initToZero();
+		r.mKey = _mKey;
+		r.mode = transactionMode::TM_JOIN;
+		r.forceOperation = forceJoin;
+		return r;
+		}
+	};
+	
+struct recordHeaderShort {
+	recordId id;		// id == 0 -> empty block
+	uint32_t offset;
+	};
+	
+// //////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+class ArchiveManager {
+public:
+	ArchiveDictionaryI* mDictionary;
+	STTSAV_STRING mBasePath;
+	float compactionRatio; // (unused space)/(used space) > this? Compact!
+	uint32_t maxArchiveSize; // bigger than this? split!
+	uint32_t minimumArchiveSize; // all archives smaller than this?
+protected:
+	bool keepFilesOpen;
+
+public:
+	ArchiveManager(ArchiveDictionaryI* _mDictionary) {
+		mDictionary = _mDictionary;
+		compactionRatio = 1.5;
+		maxArchiveSize = 8388608; // 8MB
+		minimumArchiveSize = 1048576; // 1MB
+		keepFilesOpen = false;
+		}
+	~ArchiveManager() {
+		closeOpenFiles();
+		}
+
+	// Api for single transactions
+	bool loadRecord(const archiveKey key, const recordId record, STTSAV_STRING& out) {
+		transaction t = transaction::makeLoad(key, record, out);
+		doTransactions(&t, 1);
+		return t.success;
+		}
+	bool saveRecord(const archiveKey key, const recordId record, const char* buff, const uint32_t len) {
+		return saveRecord(key, record, buffer(buff, len));
+		}
+	bool saveRecord(const archiveKey key, const recordId record, const buffer buff) {
+		transaction t = transaction::makeSave(key, record, buff);
+		doTransactions(&t, 1);
+		return t.success;
+		}
+	bool deleteRecord(const archiveKey key, const recordId record) {
+		transaction t = transaction::makeDelete(key, record);
+		doTransactions(&t, 1);
+		return t.success;
+		}
+	bool compactArchive(const archiveKey key, const bool forceCompact) {
+		transaction t = transaction::makeCompact(key, forceCompact);
+		doTransactions(&t, 1);
+		return t.success;
+		}
+	bool splitArchive(const archiveKey key, const bool forceSplit) {
+		transaction t = transaction::makeCompact(key, forceSplit);
+		doTransactions(&t, 1);
+		return t.success;
+		}
+	bool joinArchive(const archiveKey key, const bool forceJoin) {
+		transaction t = transaction::makeCompact(key, forceJoin);
+		doTransactions(&t, 1);
+		return t.success;
+		}
+	
+	void startBulkTransations() {
+		keepFilesOpen = true;
+		}
+	
+	void doTransactions(transaction* mTransactions, const int nTransactions) {
+		// transactionMode = normal, flush. 
+		//  - normal: writes to disc, and does splitting and compacting where appropriate
+		//	- flush: writes to disc but doesn't do splitting, compacting. Use on app save & exit
+		
+		// Bulk load/save/delete to save file ops
+		// first resolve mKey -> archiveId
+		//...
+		// determine if we need to split files, etc
+		//...
+		// perform transactions in non-conflicting order
+		//...
+		
+		if (!keepFilesOpen)
+			closeOpenFiles();
+		}
+	
+	void closeOpenFiles() {
+		//...
+		}
+	
+	void endBulkTransations() {
+		// close any open files here
+		closeOpenFiles();
+		keepFilesOpen = false;
+		} 
+	
+	// For an archive file, we extract a list of records
+	void extractRecordsList(const archiveId id, STTSAV_VECTOR<recordInfo>& out) {}
+
+	// Writes the dictionary to file
+	bool writeDictionary() { return false; }
+	bool readDictionary() { return false; }
+	};
+
+} // namespace sttSav

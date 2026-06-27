@@ -1,0 +1,208 @@
+#hdr
+// needed to build example.cpp itself
+#define STT_SAV_IMPL 
+#end
+
+#src
+#include <cstdint>
+#include <cstdio>
+using std::printf;
+
+#define STT_SAV_STRING std::string
+#define STT_SAV_VECTOR std::vector
+#include <string>
+#include <vector>
+#define STTSAV_ASSERT assert
+#include <cassert>
+#define STTSAV_NEW(X) new X
+#define STTSAV_DEL(X,SZ) delete X 
+
+// build the implementation
+#define STTSAV_DBG
+#define STT_SAV_IMPL
+#include "stt-sav.h"
+
+// PlantartyFace archive system
+#include <algorithm>
+#include "planetaryFaceUVArchiveDictionary.h"
+
+#end
+
+int main (int argc, char ** argv) {
+	printf("Starting example...\n");
+	
+	// Test planetary dictionary
+	using namespace sttSav;
+	PlanetaryFaceUVArchiveDictionary pdic;
+	ArchiveManager AM(&pdic);
+	
+	{
+		// TEST - planetary down
+		STTSAV_VECTOR<recordInfo> records;
+
+		// Planet 0 (large)
+		for (uint32_t i = 0; i < 50; ++i) {
+			recordInfo r;
+			r.key = pdic.buildKey(0, 0, 0, i % 128, i % 128);
+			r.record.value = i + 1;
+			r.offset = 0;
+			r.length = 100;
+			records.push_back(r);
+			}
+
+		// Planet 1 (medium)
+		for (uint32_t i = 0; i < 30; ++i) {
+			recordInfo r;
+			r.key = pdic.buildKey(1, 2, 0, i % 128, i % 128);
+			r.record.value = 100 + i;
+			r.offset = 0;
+			r.length = 100;
+			records.push_back(r);
+			}
+
+		// Planet 2 (small)
+		for (uint32_t i = 0; i < 10; ++i) {
+			recordInfo r;
+			r.key = pdic.buildKey(2, 4, 0, i % 128, i % 128);
+			r.record.value = 200 + i;
+			r.offset = 0;
+			r.length = 100;
+			records.push_back(r);
+			}
+
+		// Planet 3 (GLOBAL_FACE)
+		for (uint32_t i = 0; i < 20; ++i) {
+			recordInfo r;
+			r.key = pdic.buildKey(3, PUVADictConstants::GLOBAL_FACE, 0, 0, 0);
+			r.record.value = 300 + i;
+			r.offset = 0;
+			r.length = 100;
+			records.push_back(r);
+			}
+			
+		pdic.initNewDictionary();
+		struct workItem {
+			archiveId aid;
+			STTSAV_VECTOR<recordInfo> records;
+			};
+
+		STTSAV_VECTOR<workItem> queue;
+
+		workItem start;
+		start.aid = pdic.root.children[0]->aid;
+		start.records = records;
+		queue.push_back(start);
+		
+		int split = 0;
+
+		while (!queue.empty()) {
+			workItem w = std::move(queue.back());
+			queue.pop_back();
+			splitResult results[32];
+			uint32_t numResults;
+
+			bool ok = pdic.splitArchive( w.aid, w.records, 4000, results, numResults, 32);
+			
+			printf("split result input %i - ok? %b\n", (int)w.aid.value, ok);
+			for (uint32_t i = 0; i < numResults; ++i) 
+				printf("  archive %u size %u\n", results[i].aid.value, results[i].size);
+				
+			if (!ok)
+				continue;
+
+			workItem next[32];
+			for (uint32_t i = 0; i < numResults; ++i)
+				next[i].aid = results[i].aid;
+
+			// Redistribute records.
+			for (const recordInfo& r : w.records) {
+				archiveId aid = pdic.getArchiveIdFromShortlist(r.key, results, numResults);
+
+				for (uint32_t i = 0; i < numResults; ++i) {
+					if (results[i].aid.value == aid.value) {
+						next[i].records.push_back(r);
+						break;
+					}
+				}
+			}
+			// Queue oversized children.
+			for (uint32_t i = 0; i < numResults; ++i) {
+				if (results[i].size > 4000)
+					queue.push_back(std::move(next[i]));
+				}
+			
+			// split result:
+				
+			// Print tree
+			printf("split %i:\n", split);
+			pdic.root.dumpNode(0);
+			split++;
+			printf("\n");
+			}
+		
+		
+		// Test merging
+		{
+			archiveId arBuf[32];
+			uint32_t numArchives;
+			
+			int mergeId = 1;
+		
+			if (pdic.getMergeCandidates({13}, arBuf, numArchives, 32)) {
+				bool ok = pdic.mergeArchives(arBuf, numArchives);
+				
+				if (ok) {
+					// Print tree
+					printf("merge %i:\n", mergeId);
+					pdic.root.dumpNode(0);
+					printf("\n");
+					}
+				else
+					printf("merge %i failed\n", mergeId);
+				}
+			else {
+				printf("merge %i failed\n", mergeId);
+				}
+			
+			mergeId++;
+		
+			if (pdic.getMergeCandidates({2}, arBuf, numArchives, 32)) {
+				bool ok = pdic.mergeArchives(arBuf, numArchives);
+				
+				if (ok) {
+					// Print tree
+					printf("merge %i:\n", mergeId);
+					pdic.root.dumpNode(0);
+					printf("\n");
+					}
+				else
+					printf("merge %i failed\n", mergeId);
+				}
+			else {
+				printf("merge %i failed\n", mergeId);
+				}
+				
+			if (pdic.getMergeCandidates({2}, arBuf, numArchives, 32)) {
+				bool ok = pdic.mergeArchives(arBuf, numArchives);
+				
+				if (ok) {
+					// Print tree
+					printf("merge %i:\n", mergeId);
+					pdic.root.dumpNode(0);
+					printf("\n");
+					}
+				else
+					printf("merge %i failed\n", mergeId);
+				}
+			else {
+				printf("merge %i failed\n", mergeId);
+				}
+				
+			mergeId++;
+		}
+		
+		}
+	
+	printf("Exiting example...\n");
+	return 0;
+	}

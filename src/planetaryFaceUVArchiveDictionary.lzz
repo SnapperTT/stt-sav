@@ -1,0 +1,539 @@
+#hdr
+namespace sttSav {
+	
+struct PUVADictConstants {
+	constexpr static uint32_t PLANET_BITS =  13;
+	constexpr static uint32_t FACE_BITS   =  3;
+	constexpr static uint32_t FLAGS_BITS  =  2;
+	constexpr static uint32_t LOCAL_U_BITS = 7;
+	constexpr static uint32_t LOCAL_V_BITS = 7;
+
+	constexpr static uint32_t PLANET_SHIFT = 0;
+	constexpr static uint32_t FACE_SHIFT  = PLANET_SHIFT + PLANET_BITS;
+	constexpr static uint32_t FLAGS_SHIFT = FACE_SHIFT + FACE_BITS;
+	constexpr static uint32_t LOCAL_U_SHIFT = FLAGS_SHIFT + FLAGS_BITS;
+	constexpr static uint32_t LOCAL_V_SHIFT = LOCAL_U_SHIFT + LOCAL_U_BITS;
+
+	constexpr static uint32_t PLANET_MASK = (1u << PLANET_BITS) - 1;
+	constexpr static uint32_t FACE_MASK =   (1u << FACE_BITS) - 1;
+	constexpr static uint32_t FLAGS_MASK =  (1u << FLAGS_BITS) - 1;
+	constexpr static uint32_t LOCAL_U_MASK = (1u << LOCAL_U_BITS) - 1;
+	constexpr static uint32_t LOCAL_V_MASK = (1u << LOCAL_V_BITS) - 1;
+
+	constexpr static uint32_t NUM_FACES = 8;
+	constexpr static uint32_t ROOT_UV_SIZE = 128;
+	
+	constexpr static uint32_t GLOBAL_FACE = 6; // not attached to cube, instead attached freely to planet
+	
+	constexpr static uint8_t NODE_TYPE_UNKNOWN = 0;
+	constexpr static uint8_t NODE_TYPE_ROOT = 1;
+	constexpr static uint8_t NODE_TYPE_PLANET = 2;
+	constexpr static uint8_t NODE_TYPE_FACE = 3;
+	constexpr static uint8_t NODE_TYPE_LEAF = 4;
+	//constexpr static uint8_t NODE_TYPE_ROOT_ALL // not applicable
+	constexpr static uint8_t NODE_TYPE_REMAINDER_FLAG = 1 << 7;
+	constexpr static uint8_t NODE_TYPE_PLANET_REMAINDER = NODE_TYPE_PLANET | NODE_TYPE_REMAINDER_FLAG;
+	constexpr static uint8_t NODE_TYPE_FACE_REMAINDER = NODE_TYPE_FACE | NODE_TYPE_REMAINDER_FLAG;
+	constexpr static uint8_t NODE_TYPE_LEAF_REMAINDER = NODE_TYPE_LEAF | NODE_TYPE_REMAINDER_FLAG;
+	
+	static const char* nodeTypeToString(const uint8_t nt) {
+		switch (nt) {
+			case NODE_TYPE_ROOT: return "ROOT";
+			case NODE_TYPE_PLANET: return "PLANET";
+			case NODE_TYPE_FACE: return "FACE";
+			case NODE_TYPE_LEAF: return "LEAF";
+			case NODE_TYPE_PLANET_REMAINDER: return "PLANET-R";
+			case NODE_TYPE_FACE_REMAINDER: return "FACE-R";
+			case NODE_TYPE_LEAF_REMAINDER: return "LEAF-R";
+			default: return "(unknown)";
+			}
+		}
+	};
+	
+} // namespace sttSav
+
+#ifndef STTSAV_VECTOR_PLANETNODE
+	#define STTSAV_VECTOR_PLANETNODE STTSAV_VECTOR
+#endif
+#end
+
+#src
+
+#end
+
+namespace sttSav {
+
+class PlanetaryFaceUVArchiveDictionary : public ArchiveDictionaryI {
+public:
+	/// Archive dictionary for planetary worlds using cube-face UV coordinates.
+	///
+	/// Keys are encoded as (planet, face, flags, localU, localV), where each
+	/// cube face is partitioned using a quadtree. Spatially nearby objects are
+	/// therefore assigned to the same archive whenever possible, allowing related
+	/// terrain, entities and world data to be stored together.
+	///
+	struct unpackedKey {
+		uint16_t planet;
+		uint8_t face;
+		uint8_t flags;
+		uint8_t localU;
+		uint8_t localV;
+		
+		inline unpackedKey() : planet(0), face(0), flags(0), localU(0), localV(0) {}
+		inline unpackedKey(const uint16_t _planet, const uint8_t _face, const uint8_t _flags, const uint8_t _localU, const uint8_t _localV) :
+			planet(_planet), face(_face), flags(_flags), localU(_localU), localV(_localV) {}
+			
+		inline unpackedKey(const archiveKey key) {
+			planet = (key.value >> PUVADictConstants::PLANET_SHIFT) & PUVADictConstants::PLANET_MASK;
+			face =  (key.value >> PUVADictConstants::FACE_SHIFT) & PUVADictConstants::FACE_MASK;
+			flags = (key.value >> PUVADictConstants::FLAGS_SHIFT) & PUVADictConstants::FLAGS_MASK;
+			localU = (key.value >> PUVADictConstants::LOCAL_U_SHIFT) & PUVADictConstants::LOCAL_U_MASK;
+			localV = (key.value >> PUVADictConstants::LOCAL_V_SHIFT) & PUVADictConstants::LOCAL_V_MASK;
+			}
+		
+		inline archiveKey buildKey() const {
+			archiveKey ret;
+			ret.value = ((uint32_t(planet) & PUVADictConstants::PLANET_MASK) << PUVADictConstants::PLANET_SHIFT)
+					  | ((uint32_t(face) & PUVADictConstants::FACE_MASK) << PUVADictConstants::FACE_SHIFT)
+					  | ((uint32_t(flags) & PUVADictConstants::FLAGS_MASK) << PUVADictConstants::FLAGS_SHIFT)
+					  | ((uint32_t(localU) & PUVADictConstants::LOCAL_U_MASK) << PUVADictConstants::LOCAL_U_SHIFT)
+					  | ((uint32_t(localV) & PUVADictConstants::LOCAL_V_MASK) << PUVADictConstants::LOCAL_V_SHIFT);
+			return ret;
+			}
+		};
+	
+	struct node {
+		archiveId aid;
+		uint16_t planet;
+		uint8_t type;
+		uint8_t face,flags,u,v,uvSize;
+		node* parent;
+		STTSAV_VECTOR_PLANETNODE<node*> children;
+		
+		node () {
+			aid.value = 0;
+			planet = 0;
+			type = PUVADictConstants::NODE_TYPE_UNKNOWN;
+			face = 0; flags = 0; u = 0; v = 0; uvSize = 0;
+			parent = NULL;
+			}
+		
+		~node () {
+			for (node* n : children)
+				STTSAV_DEL(n, sizeof(node));
+			}
+		
+		bool canSplit() const {
+			// is this permitted to split under any circumstances?
+			if (type == PUVADictConstants::NODE_TYPE_FACE && face == PUVADictConstants::GLOBAL_FACE)
+				return false;
+			return true;
+			}
+		
+		bool containsExact(const unpackedKey& k) const {
+			// Returns true if this node contains this key exactly
+			if (isRemainder())
+				return false;
+			
+			switch (type) {
+				case PUVADictConstants::NODE_TYPE_ROOT:
+					return true;
+				case PUVADictConstants::NODE_TYPE_PLANET:
+					if (planet != k.planet)
+						return false;
+					return flags == k.flags;
+				case PUVADictConstants::NODE_TYPE_FACE:
+					if (planet != k.planet || face != k.face)
+						return false;
+					return flags == k.flags;
+				case PUVADictConstants::NODE_TYPE_LEAF:
+					if (planet != k.planet || face != k.face || flags != k.flags)
+						return false;
+					return k.localU >= u && k.localU < u + uvSize &&
+						   k.localV >= v && k.localV < v + uvSize;
+				default:
+					STTSAV_ASSERT(false);
+					return false;
+				}
+			}
+		
+		inline bool isRemainder() const { return type & PUVADictConstants::NODE_TYPE_REMAINDER_FLAG; }
+		
+		void dumpNode(const int depth) const {
+			#ifdef STTSAV_DBG
+			for (int i = 0; i < depth; ++i)
+				printf(" ");
+			if ((type & PUVADictConstants::NODE_TYPE_LEAF) == PUVADictConstants::NODE_TYPE_LEAF)
+				printf("type %s, id %i, p %i, f %i, u %i, v %i, uvSz %i", PUVADictConstants::nodeTypeToString(type), (int)aid.value, (int) planet, (int)face, (int)u, (int)v, (int)uvSize);
+			else
+				printf("type %s, id %i, p %i, f %i", PUVADictConstants::nodeTypeToString(type), (int)aid.value, (int) planet, (int)face);
+			if (parent)
+				printf(" [parent: %s %i]", PUVADictConstants::nodeTypeToString(parent->type), (int) parent->aid.value);
+			printf("\n");
+			for (const node* const n : children)
+				n->dumpNode(depth + 1);
+			#endif
+			}
+		};
+	
+	struct nodeLookup {
+		archiveId aid;
+		node* ptr;
+		};
+	
+	STTSAV_VECTOR<nodeLookup> mLookup;  // Lookup table of active archives. Routing nodes (archive.value == 0) are never present in this table.
+	node root;
+
+	PlanetaryFaceUVArchiveDictionary() {
+		root.type = PUVADictConstants::NODE_TYPE_ROOT;
+		}
+
+	~PlanetaryFaceUVArchiveDictionary() {}
+
+	void initNewDictionary() {
+		// creates an initial node for a new dictionary
+		node* n = STTSAV_NEW(node);
+		n->aid = getNextId();
+		n->type = PUVADictConstants::NODE_TYPE_PLANET_REMAINDER;
+		n->parent = &root;
+		root.children.push_back(n);
+		insertLookup(n);
+		}
+
+	archiveKey buildKey(const uint16_t planet, const uint8_t face, const uint8_t flags, const uint8_t localU, const uint8_t localV) const {
+		return unpackedKey(planet, face, flags, localU, localV).buildKey();
+		}
+	
+	void reserveIds(const uint32_t numIds) {
+		if (numIds <= mLookup.size()) return;
+		uint32_t start = mLookup.size();
+		mLookup.resize(numIds);
+		for (uint32_t i = start; i < numIds; ++i) {
+			mLookup[i].aid.value = i + 1;
+			mLookup[i].ptr = NULL;
+			}
+		}
+	
+	archiveId getNextId() {
+		for (uint32_t i = 0; i < mLookup.size(); ++i) {
+			if (mLookup[i].ptr == NULL)
+				return mLookup[i].aid;
+			}
+		// all slots are full
+		nodeLookup l;
+		l.aid.value = mLookup.size()+1;
+		l.ptr = NULL;
+		mLookup.push_back(l);
+		return l.aid;
+		}
+		
+	
+	archiveId getArchiveId(const archiveKey key) const {
+		// Searches the entire tree for an archive for a specified key
+		node* n = lookup(const_cast<node*>(&root), key);
+		if (n)
+			return n->aid;
+		return {0};
+		}
+		
+	node* getNodeByArchiveId (const archiveId aid) const {
+		if (aid.value && aid.value-1 < mLookup.size())
+			return mLookup[aid.value-1].ptr;
+		return NULL;
+		}
+		
+	void insertLookup(node* n) {
+		reserveIds(n->aid.value-1);
+		mLookup[n->aid.value-1].ptr = n;
+		}
+		
+	void clearLookup(const archiveId aid) {
+		if (aid.value && aid.value < mLookup.size())
+			mLookup[aid.value-1].ptr = NULL;
+		}
+	
+	static node* lookup(node* start, const unpackedKey& key) {
+		node* current = start;
+		while (current) {
+			node* exact = NULL;
+			node* remainder = NULL;
+			
+			if (!current->children.size())
+				return current;
+			for (node* child : current->children) {
+				if (child->containsExact(key)) {
+					exact = child;
+					break;
+					}
+				else if (child->isRemainder())
+					remainder = child;
+				}
+			if (exact)
+				current = exact;
+			else if (remainder)
+				current = remainder;
+			else
+				return current;
+			}
+		return NULL;
+		}
+			
+	void getArchiveFilename(const archiveId id, char* nameOut, uint32_t& lenOut, const uint32_t maxLen) const {
+		node* n = getNodeByArchiveId(id);
+		switch (n->type) {
+			case PUVADictConstants::NODE_TYPE_PLANET_REMAINDER: 
+				lenOut = snprintf(nameOut, maxLen, "planet-r.sav");
+				return;
+			case PUVADictConstants::NODE_TYPE_PLANET: 
+				lenOut = snprintf(nameOut, maxLen, "planet-%i.sav", (int)n->planet);
+				return;
+			case PUVADictConstants::NODE_TYPE_FACE: 
+				{
+				if (n->face == PUVADictConstants::GLOBAL_FACE)
+					lenOut = snprintf(nameOut, maxLen, "planet-%i-face-g.sav", (int)n->planet);
+				else
+					lenOut = snprintf(nameOut, maxLen, "planet-%i-face-%i.sav", (int)n->planet, (int)n->face);
+				}
+				return;
+			case PUVADictConstants::NODE_TYPE_LEAF: 
+				{
+				lenOut = snprintf(nameOut, maxLen, "planet-%i-face-%i-sz%i-u%i-v%i.sav", (int)n->planet, (int)n->face, n->uvSize, n->u, n->v);
+				}
+				return;
+			default:
+				STTSAV_ASSERT(false);
+			}
+		}
+	
+	bool splitArchive(const archiveId id, const STTSAV_VECTOR<recordInfo>& records, const uint32_t maxArchiveSize, splitResult* resultsOut, uint32_t& numResultsOut, const uint32_t maxResultsOut) {
+		numResultsOut = 0;
+
+		node* n = getNodeByArchiveId(id);
+		if (!n)
+			return false;
+
+		if (!n->canSplit())
+			return false;
+
+		//////////////////////////////////////////////////////////////////////////
+		// Build buckets
+		//////////////////////////////////////////////////////////////////////////
+
+		STTSAV_VECTOR<splitBucket> buckets;
+
+		for (const recordInfo& r : records) {
+			unpackedKey k(r.key);
+			uint32_t bucket = 0;
+
+			switch (n->type) {
+				case PUVADictConstants::NODE_TYPE_PLANET_REMAINDER:
+					bucket = k.planet;
+					break;
+				case PUVADictConstants::NODE_TYPE_PLANET:
+					bucket = k.face;
+					break;
+				case PUVADictConstants::NODE_TYPE_FACE:
+				case PUVADictConstants::NODE_TYPE_LEAF: {
+					const uint32_t parentSize = (n->uvSize == 0) ? PUVADictConstants::ROOT_UV_SIZE : n->uvSize;
+					const uint32_t half = parentSize >> 1;
+					if (k.localU >= n->u + half)
+						bucket |= 1;
+					if (k.localV >= n->v + half)
+						bucket |= 2;
+					break;
+					}
+				default:
+					STTSAV_ASSERT(false);
+					return false;
+				}
+
+			splitBucket::appendOrInsert(buckets, bucket, r.length);
+			}
+
+		//////////////////////////////////////////////////////////////////////////
+		// PLANET-R : peel planets.
+		//////////////////////////////////////////////////////////////////////////
+
+		if (n->type == PUVADictConstants::NODE_TYPE_PLANET_REMAINDER) {
+			std::sort(buckets.rbegin(), buckets.rend());
+
+			uint32_t remaining = 0;
+			for (const splitBucket& b : buckets)
+				remaining += b.bytes;
+
+			for (const splitBucket& b : buckets) {
+				if (remaining <= maxArchiveSize)
+					break;
+
+				remaining -= b.bytes;
+
+				node* child = STTSAV_NEW(node);
+				child->parent = n->parent;
+				child->type = PUVADictConstants::NODE_TYPE_PLANET;
+				child->planet = (uint16_t)b.value;
+				child->aid = getNextId();
+
+				insertLookup(child);
+
+				n->parent->children.push_back(child);
+
+				STTSAV_ASSERT(numResultsOut < maxResultsOut);
+
+				resultsOut[numResultsOut].aid = child->aid;
+				resultsOut[numResultsOut].size = b.bytes;
+				++numResultsOut;
+				}
+
+			resultsOut[numResultsOut].aid = n->aid;
+			resultsOut[numResultsOut].size = remaining;
+			++numResultsOut;
+
+			return true;
+			}
+
+		//////////////////////////////////////////////////////////////////////////
+		// Split this archive into deterministic children.
+		//////////////////////////////////////////////////////////////////////////
+
+		clearLookup(n->aid);
+		n->aid.value = 0;
+
+		switch (n->type) {
+			case PUVADictConstants::NODE_TYPE_PLANET:
+				for (uint32_t face = 0;  face <= PUVADictConstants::GLOBAL_FACE;  ++face) {
+					node* child = STTSAV_NEW(node);
+					child->parent = n;
+					child->type = PUVADictConstants::NODE_TYPE_FACE;
+					child->planet = n->planet;
+					child->face = (uint8_t)face;
+					child->flags = n->flags;
+					child->aid = getNextId();
+					insertLookup(child);
+					n->children.push_back(child);
+					resultsOut[numResultsOut].aid = child->aid;
+					resultsOut[numResultsOut].size = 0;
+					++numResultsOut;
+					}
+				break;
+
+			case PUVADictConstants::NODE_TYPE_FACE:
+			case PUVADictConstants::NODE_TYPE_LEAF: {
+				const uint8_t parentSize = (n->uvSize == 0) ? PUVADictConstants::ROOT_UV_SIZE : n->uvSize;
+				const uint8_t half = parentSize >> 1;
+
+				for (uint32_t q = 0; q < 4; ++q) {
+					node* child = STTSAV_NEW(node);
+					child->parent = n;
+					child->type = PUVADictConstants::NODE_TYPE_LEAF;
+					child->planet = n->planet;
+					child->face = n->face;
+					child->flags = n->flags;
+					child->u = n->u;
+					child->v = n->v;
+					child->uvSize = half;
+
+					if (q & 1)
+						child->u += half;
+					if (q & 2)
+						child->v += half;
+
+					child->aid = getNextId();
+					insertLookup(child);
+					n->children.push_back(child);
+					resultsOut[numResultsOut].aid = child->aid;
+					resultsOut[numResultsOut].size = 0;
+					++numResultsOut;
+					}
+
+				break;
+				}
+
+			default:
+				STTSAV_ASSERT(false);
+				return false;
+			}
+
+		//////////////////////////////////////////////////////////////////////////
+		// Populate child sizes.
+		for (const splitBucket& b : buckets) {
+			switch (n->type) {
+			case PUVADictConstants::NODE_TYPE_PLANET:
+				resultsOut[b.value].size = b.bytes;
+				break;
+			case PUVADictConstants::NODE_TYPE_FACE:
+			case PUVADictConstants::NODE_TYPE_LEAF:
+				resultsOut[b.value].size = b.bytes;
+				break;
+			default:
+				break;
+				}
+			}
+
+		return true;
+		}
+		
+	bool getMergeCandidates( const archiveId id, archiveId* archivesOut, uint32_t& numArchivesOut, const uint32_t maxArchivesOut) const {
+		numArchivesOut = 0;
+		node* n = getNodeByArchiveId(id);
+		if (!n)
+			return false;
+		node* parent = n->parent;
+		if (!parent)
+			return false;
+
+		// Parent must be a routing node.
+		if (parent->aid.value != 0)
+			return false;
+			
+		// Root and PLANET-R are never merged.
+		if (parent->type == PUVADictConstants::NODE_TYPE_ROOT || parent->type == PUVADictConstants::NODE_TYPE_PLANET_REMAINDER)
+			return false;
+
+		for (const node* child : parent->children) {
+			if (!child->aid.value)
+				return false; // malformed routing node
+			STTSAV_ASSERT(numArchivesOut < maxArchivesOut);
+			archivesOut[numArchivesOut++] = child->aid;
+			}
+		return numArchivesOut != 0;
+		}
+	
+	bool mergeArchives(const archiveId* archives, const uint32_t numArchives) {
+		if (!numArchives)
+			return false;
+
+		node* first = getNodeByArchiveId(archives[0]);
+		if (!first)
+			return false;
+		node* parent = first->parent;
+		if (!parent)
+			return false;
+
+		// Parent must currently be routing.
+		STTSAV_ASSERT(parent->aid.value == 0);
+
+		// Verify every archive belongs to this parent.
+		for (uint32_t i = 0; i < numArchives; ++i) {
+			node* n = getNodeByArchiveId(archives[i]);
+			if (!n)
+				return false;
+			if (n->parent != parent)
+				return false;
+			}
+
+		// Delete every child.
+		while (!parent->children.empty()) {
+			node* child = parent->children.back();
+			parent->children.pop_back();
+			clearLookup(child->aid);
+			STTSAV_DEL(child, sizeof(node));
+			}
+		// Parent becomes an archive again.
+		parent->aid = getNextId();
+		insertLookup(parent);
+		return true;
+		}
+	};
+	
+
+} // namespace sttSav
