@@ -1,0 +1,275 @@
+#hdr
+namespace sttSav {
+	
+struct XYDictConstants {
+	constexpr static uint8_t NODE_TYPE_UNKNOWN = 0;
+	constexpr static uint8_t NODE_TYPE_ROOT = 1;
+	constexpr static uint8_t NODE_TYPE_LEAF = 2;
+
+	static const char* nodeTypeToString(const uint8_t nt) {
+		switch (nt) {
+			case NODE_TYPE_ROOT: return "ROOT";
+			case NODE_TYPE_LEAF: return "LEAF";
+			default: return "(unknown)";
+			}
+		}
+	};
+	
+} // namespace sttSav
+
+#end
+
+#src
+#end
+
+namespace sttSav {
+
+class XYArchiveDictionary : public ArchiveDictionaryI {
+public:
+	/// Archive dictionary for 2D open worlds
+	/// Splitting via quadtree. Keys are constructed from a pair of int16_t
+	struct unpackedKey {
+		int16_t x;
+		int16_t y;
+
+		inline unpackedKey() : x(0), y(0) {}
+		inline unpackedKey(int16_t _x, int16_t _y) : x(_x), y(_y) {}
+
+		inline unpackedKey(archiveKey key) {
+			x = int16_t(key.value & 0xffff);
+			y = int16_t((key.value >> 16) & 0xffff);
+			}
+
+		inline archiveKey buildKey() const {
+			archiveKey k;
+			k.value = (uint32_t(uint16_t(x))) | (uint32_t(uint16_t(y)) << 16);
+			return k;
+			}
+		};
+	
+	struct node {
+		archiveId aid;
+		int16_t x;
+		int16_t y;
+		uint32_t size;
+		uint8_t type;
+		node* parent;
+		STTSAV_VECTOR<node*> children;
+		
+		node () {
+			aid.value = 0;
+			x = 0; y = 0; size = 0;
+			type = XYDictConstants::NODE_TYPE_UNKNOWN;
+			parent = NULL;
+			}
+		
+		~node () {
+			for (node* n : children)
+				STTSAV_DEL(n, sizeof(node));
+			}
+		
+		void encode(BinaryWriter& w) const {
+			w.StartObject();
+			w.Key("aid");  w.Uint32(aid.value);
+			w.Key("x");    w.Int16(x);
+			w.Key("y");    w.Int16(y);
+			w.Key("size"); w.Uint32(size);
+			w.Key("type"); w.Uint8(type);
+			
+			w.Key("children");
+			w.StartArray();
+				for (node* c : children)
+					c->encode(w);
+			w.EndArray();
+			w.EndObject();
+			}
+			
+		void decode(const BinaryValue& val) {
+			aid.value = val["aid"].GetUint32();
+			x = val["x"].GetInt16();
+			y = val["y"].GetInt16();
+			size = val["size"].GetUint32();
+			type = val["type"].GetUint8();
+
+			parent = NULL;
+			BinaryValue childArray = val["children"];
+
+			STTSAV_ASSERT(childArray.IsArray());
+
+			for (uint32_t i = 0; i < childArray.Size(); ++i) {
+				node* c = STTSAV_NEW(node);
+				c->decode(childArray[i]);
+				c->parent = this;
+				children.push_back(c);
+				}
+			}
+		
+		bool containsExact(const unpackedKey& k) const {
+			// Returns true if this node contains this key exactly
+			int32_t _x = x; // promote types
+			int32_t _y = y;
+			return k.x >= _x && k.x < _x + int32_t(size) && k.y >= _y && k.y < _y + int32_t(size);
+			}
+			
+		inline bool isRemainder() const { return false; }
+		
+		inline bool isAllowedToMerge() const {
+			return parent && !(parent->type == XYDictConstants::NODE_TYPE_ROOT);
+			}
+		
+		void dumpNode(const int depth) const {
+			#ifdef STTSAV_DBG
+			for (int i = 0; i < depth; ++i)
+				printf(" ");
+			printf("type %s, id %i, x %i, y %i, sz %i\n", XYDictConstants::nodeTypeToString(type), (int)aid.value, (int) x, (int)y, (int)size);
+			for (const node* const n : children)
+				n->dumpNode(depth + 1);
+			#endif
+			}
+		};
+	
+	DictionaryLookup<node, unpackedKey> mLookup; // Lookup table of active archives. Routing nodes (archive.value == 0) are never present in this table.
+	node root;
+
+	XYArchiveDictionary() {
+		root.type = XYDictConstants::NODE_TYPE_ROOT;
+		}
+
+	~XYArchiveDictionary() {}
+
+	void initNewDictionary() {
+		// creates an initial node for a new dictionary
+		node* n = STTSAV_NEW(node);
+		// top level 
+		n->aid = mLookup.getNextId();
+		n->type = XYDictConstants::NODE_TYPE_LEAF;
+		n->x = -32768;
+		n->y = -32768;
+		n->size = 65536;
+		n->parent = &root;
+		root.children.push_back(n);
+		mLookup.insertLookup(n);
+		}
+
+	archiveKey buildKey(const int16_t x, const int16_t y) const {
+		return unpackedKey(x, y).buildKey();
+		}
+		
+	archiveId getArchiveId(const archiveKey key) const {
+		return mLookup.getArchiveId(key, const_cast<node*>(&root));
+		}
+			
+	void getArchiveFilename(const archiveId id, char* nameOut, uint32_t& lenOut, const uint32_t maxLen) const {
+		node* n = mLookup.getNodeByArchiveId(id);
+		switch (n->type) {
+			case XYDictConstants::NODE_TYPE_LEAF: 
+				lenOut = snprintf(nameOut, maxLen, "region-sz%i-x%i-y%i.sav", n->size, n->x, n->y);
+			default:
+				STTSAV_ASSERT(false);
+			}
+		}
+	
+	bool splitArchive(const archiveId id, const STTSAV_VECTOR<recordInfo>& records, const uint32_t maxArchiveSize, splitResult* resultsOut, uint32_t& numResultsOut, const uint32_t maxResultsOut) {
+		numResultsOut = 0;
+
+		node* n = mLookup.getNodeByArchiveId(id);
+		if (!n)
+			return false;
+
+		// Can't subdivide any further.
+		if (n->size <= 1)
+			return false;
+
+		//////////////////////////////////////////////////////////////////////////
+		// Build quadrant buckets
+		//////////////////////////////////////////////////////////////////////////
+
+		STTSAV_VECTOR<splitBucket> buckets;
+
+		const uint16_t half = n->size >> 1;
+
+		for (const recordInfo& r : records) {
+			unpackedKey k(r.key);
+			uint32_t bucket = 0;
+
+			if (int32_t(k.x) >= int32_t(n->x) + half)
+				bucket |= 1;
+			if (int32_t(k.y) >= int32_t(n->y) + half)
+				bucket |= 2;
+			splitBucket::appendOrInsert(buckets, bucket, r.length);
+			}
+
+		// Already below the split threshold.
+		uint32_t totalBytes = 0;
+		for (const splitBucket& b : buckets)
+			totalBytes += b.bytes;
+
+		if (totalBytes <= maxArchiveSize)
+			return false;
+
+		//////////////////////////////////////////////////////////////////////////
+		// Convert this archive into a routing node.
+		//////////////////////////////////////////////////////////////////////////
+
+		mLookup.clearLookup(n->aid);
+		n->aid.value = 0;
+
+		//////////////////////////////////////////////////////////////////////////
+		// Create the four deterministic children.
+		//////////////////////////////////////////////////////////////////////////
+
+		for (uint32_t q = 0; q < 4; ++q) {
+			node* child = STTSAV_NEW(node);
+
+			child->parent = n;
+			child->type = XYDictConstants::NODE_TYPE_LEAF;
+
+			child->size = half;
+
+			child->x = n->x;
+			child->y = n->y;
+
+			if (q & 1)
+				child->x += half;
+
+			if (q & 2)
+				child->y += half;
+
+			child->aid = mLookup.getNextId();
+			mLookup.insertLookup(child);
+
+			n->children.push_back(child);
+
+			STTSAV_ASSERT(numResultsOut < maxResultsOut);
+
+			resultsOut[numResultsOut].aid = child->aid;
+			resultsOut[numResultsOut].size = 0;
+
+			++numResultsOut;
+			}
+
+		//////////////////////////////////////////////////////////////////////////
+		// Populate archive sizes.
+		//////////////////////////////////////////////////////////////////////////
+
+		for (const splitBucket& b : buckets) {
+			STTSAV_ASSERT(b.value < 4);
+			resultsOut[b.value].size = b.bytes;
+			}
+
+		return true;
+		}
+		
+	bool getMergeCandidates( const archiveId id, archiveId* archivesOut, uint32_t& numArchivesOut, const uint32_t maxArchivesOut) const {
+		return DictionaryMergeHelper<node,unpackedKey>::getMergeCandidatesWorker(mLookup, id, archivesOut, numArchivesOut, maxArchivesOut);
+		}
+	
+	bool mergeArchives(const archiveId* archives, const uint32_t numArchives) {
+		return DictionaryMergeHelper<node,unpackedKey>::mergeArchivesWorker(mLookup, archives, numArchives);
+		}
+		
+	void dbgDump() const { root.dumpNode(0); }
+	};
+	
+
+} // namespace sttSav

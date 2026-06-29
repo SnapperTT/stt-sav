@@ -100,32 +100,21 @@ namespace sttSav
       bool canSplit () const;
       bool containsExact (unpackedKey const & k) const;
       bool isRemainder () const;
+      bool isAllowedToMerge () const;
       void dumpNode (int const depth) const;
     };
-    struct nodeLookup
-    {
-      archiveId aid;
-      node * ptr;
-    };
-    STTSAV_VECTOR <nodeLookup> mLookup;
+    DictionaryLookup <node, unpackedKey> mLookup;
     node root;
     PlanetaryFaceUVArchiveDictionary ();
     ~ PlanetaryFaceUVArchiveDictionary ();
     void initNewDictionary ();
     archiveKey buildKey (uint16_t const planet, uint8_t const face, uint8_t const flags, uint8_t const localU, uint8_t const localV) const;
-    void reserveIds (uint32_t const numIds);
-    void rebuildLookupArray ();
-    void rebuildLookupArrayWorker (node * working);
-    archiveId getNextId ();
     archiveId getArchiveId (archiveKey const key) const;
-    node * getNodeByArchiveId (archiveId const aid) const;
-    void insertLookup (node * n);
-    void clearLookup (archiveId const aid);
-    static node * lookup (node * start, unpackedKey const & key);
     void getArchiveFilename (archiveId const id, char * nameOut, uint32_t & lenOut, uint32_t const maxLen) const;
     bool splitArchive (archiveId const id, STTSAV_VECTOR <recordInfo> const & records, uint32_t const maxArchiveSize, splitResult * resultsOut, uint32_t & numResultsOut, uint32_t const maxResultsOut);
     bool getMergeCandidates (archiveId const id, archiveId * archivesOut, uint32_t & numArchivesOut, uint32_t const maxArchivesOut) const;
     bool mergeArchives (archiveId const * archives, uint32_t const numArchives);
+    void dbgDump () const;
   };
 }
 namespace sttSav
@@ -168,6 +157,13 @@ namespace sttSav
 {
   LZZ_INLINE bool PlanetaryFaceUVArchiveDictionary::node::isRemainder () const
                                                 { return type & PUVADictConstants::NODE_TYPE_REMAINDER_FLAG; }
+}
+namespace sttSav
+{
+  LZZ_INLINE bool PlanetaryFaceUVArchiveDictionary::node::isAllowedToMerge () const
+                                                     {
+			return parent && !(parent->type == PUVADictConstants::NODE_TYPE_ROOT || parent->type == PUVADictConstants::NODE_TYPE_PLANET_REMAINDER);
+			}
 }
 #undef LZZ_INLINE
 #endif
@@ -327,11 +323,11 @@ namespace sttSav
                                  {
 		// creates an initial node for a new dictionary
 		node* n = STTSAV_NEW(node);
-		n->aid = getNextId();
+		n->aid = mLookup.getNextId();
 		n->type = PUVADictConstants::NODE_TYPE_PLANET_REMAINDER;
 		n->parent = &root;
 		root.children.push_back(n);
-		insertLookup(n);
+		mLookup.insertLookup(n);
 		}
 }
 namespace sttSav
@@ -343,120 +339,16 @@ namespace sttSav
 }
 namespace sttSav
 {
-  void PlanetaryFaceUVArchiveDictionary::reserveIds (uint32_t const numIds)
-                                               {
-		if (numIds <= mLookup.size()) return;
-		uint32_t start = mLookup.size();
-		mLookup.resize(numIds);
-		for (uint32_t i = start; i < numIds; ++i) {
-			mLookup[i].aid.value = i + 1;
-			mLookup[i].ptr = NULL;
-			}
-		}
-}
-namespace sttSav
-{
-  void PlanetaryFaceUVArchiveDictionary::rebuildLookupArray ()
-                                  {
-		mLookup.clear();
-		rebuildLookupArrayWorker(&root);
-		}
-}
-namespace sttSav
-{
-  void PlanetaryFaceUVArchiveDictionary::rebuildLookupArrayWorker (node * working)
-                                                     {
-		insertLookup(working);
-		for (node* c : working->children)
-			rebuildLookupArrayWorker(c);
-		}
-}
-namespace sttSav
-{
-  archiveId PlanetaryFaceUVArchiveDictionary::getNextId ()
-                              {
-		for (uint32_t i = 0; i < mLookup.size(); ++i) {
-			if (mLookup[i].ptr == NULL)
-				return mLookup[i].aid;
-			}
-		// all slots are full
-		nodeLookup l;
-		l.aid.value = mLookup.size()+1;
-		l.ptr = NULL;
-		mLookup.push_back(l);
-		return l.aid;
-		}
-}
-namespace sttSav
-{
   archiveId PlanetaryFaceUVArchiveDictionary::getArchiveId (archiveKey const key) const
                                                            {
-		// Searches the entire tree for an archive for a specified key
-		node* n = lookup(const_cast<node*>(&root), key);
-		if (n)
-			return n->aid;
-		return {0};
-		}
-}
-namespace sttSav
-{
-  PlanetaryFaceUVArchiveDictionary::node * PlanetaryFaceUVArchiveDictionary::getNodeByArchiveId (archiveId const aid) const
-                                                             {
-		if (aid.value && aid.value-1 < mLookup.size())
-			return mLookup[aid.value-1].ptr;
-		return NULL;
-		}
-}
-namespace sttSav
-{
-  void PlanetaryFaceUVArchiveDictionary::insertLookup (node * n)
-                                   {
-		reserveIds(n->aid.value-1);
-		mLookup[n->aid.value-1].ptr = n;
-		}
-}
-namespace sttSav
-{
-  void PlanetaryFaceUVArchiveDictionary::clearLookup (archiveId const aid)
-                                              {
-		if (aid.value && aid.value < mLookup.size())
-			mLookup[aid.value-1].ptr = NULL;
-		}
-}
-namespace sttSav
-{
-  PlanetaryFaceUVArchiveDictionary::node * PlanetaryFaceUVArchiveDictionary::lookup (node * start, unpackedKey const & key)
-                                                                 {
-		node* current = start;
-		while (current) {
-			node* exact = NULL;
-			node* remainder = NULL;
-			
-			if (!current->children.size())
-				return current;
-			for (node* child : current->children) {
-				if (child->containsExact(key)) {
-					exact = child;
-					break;
-					}
-				else if (child->isRemainder())
-					remainder = child;
-				}
-			if (exact)
-				current = exact;
-			else if (remainder)
-				current = remainder;
-			else
-				return current;
-			}
-		return NULL;
+		return mLookup.getArchiveId(key, const_cast<node*>(&root));
 		}
 }
 namespace sttSav
 {
   void PlanetaryFaceUVArchiveDictionary::getArchiveFilename (archiveId const id, char * nameOut, uint32_t & lenOut, uint32_t const maxLen) const
                                                                                                                   {
-		node* n = getNodeByArchiveId(id);
+		node* n = mLookup.getNodeByArchiveId(id);
 		switch (n->type) {
 			case PUVADictConstants::NODE_TYPE_PLANET_REMAINDER: 
 				lenOut = snprintf(nameOut, maxLen, "planet-r.sav");
@@ -488,7 +380,7 @@ namespace sttSav
                                                                                                                                                                                                        {
 		numResultsOut = 0;
 
-		node* n = getNodeByArchiveId(id);
+		node* n = mLookup.getNodeByArchiveId(id);
 		if (!n)
 			return false;
 
@@ -551,9 +443,9 @@ namespace sttSav
 				child->parent = n->parent;
 				child->type = PUVADictConstants::NODE_TYPE_PLANET;
 				child->planet = (uint16_t)b.value;
-				child->aid = getNextId();
+				child->aid = mLookup.getNextId();
 
-				insertLookup(child);
+				mLookup.insertLookup(child);
 
 				n->parent->children.push_back(child);
 
@@ -575,7 +467,7 @@ namespace sttSav
 		// Split this archive into deterministic children.
 		//////////////////////////////////////////////////////////////////////////
 
-		clearLookup(n->aid);
+		mLookup.clearLookup(n->aid);
 		n->aid.value = 0;
 
 		switch (n->type) {
@@ -587,8 +479,8 @@ namespace sttSav
 					child->planet = n->planet;
 					child->face = (uint8_t)face;
 					child->flags = n->flags;
-					child->aid = getNextId();
-					insertLookup(child);
+					child->aid = mLookup.getNextId();
+					mLookup.insertLookup(child);
 					n->children.push_back(child);
 					resultsOut[numResultsOut].aid = child->aid;
 					resultsOut[numResultsOut].size = 0;
@@ -617,8 +509,8 @@ namespace sttSav
 					if (q & 2)
 						child->v += half;
 
-					child->aid = getNextId();
-					insertLookup(child);
+					child->aid = mLookup.getNextId();
+					mLookup.insertLookup(child);
 					n->children.push_back(child);
 					resultsOut[numResultsOut].aid = child->aid;
 					resultsOut[numResultsOut].size = 0;
@@ -656,69 +548,20 @@ namespace sttSav
 {
   bool PlanetaryFaceUVArchiveDictionary::getMergeCandidates (archiveId const id, archiveId * archivesOut, uint32_t & numArchivesOut, uint32_t const maxArchivesOut) const
                                                                                                                                             {
-		numArchivesOut = 0;
-		node* n = getNodeByArchiveId(id);
-		if (!n)
-			return false;
-		node* parent = n->parent;
-		if (!parent)
-			return false;
-
-		// Parent must be a routing node.
-		if (parent->aid.value != 0)
-			return false;
-			
-		// Root and PLANET-R are never merged.
-		if (parent->type == PUVADictConstants::NODE_TYPE_ROOT || parent->type == PUVADictConstants::NODE_TYPE_PLANET_REMAINDER)
-			return false;
-
-		for (const node* child : parent->children) {
-			if (!child->aid.value)
-				return false; // malformed routing node
-			STTSAV_ASSERT(numArchivesOut < maxArchivesOut);
-			archivesOut[numArchivesOut++] = child->aid;
-			}
-		return numArchivesOut != 0;
+		return DictionaryMergeHelper<node,unpackedKey>::getMergeCandidatesWorker(mLookup, id, archivesOut, numArchivesOut, maxArchivesOut);
 		}
 }
 namespace sttSav
 {
   bool PlanetaryFaceUVArchiveDictionary::mergeArchives (archiveId const * archives, uint32_t const numArchives)
                                                                                   {
-		if (!numArchives)
-			return false;
-
-		node* first = getNodeByArchiveId(archives[0]);
-		if (!first)
-			return false;
-		node* parent = first->parent;
-		if (!parent)
-			return false;
-
-		// Parent must currently be routing.
-		STTSAV_ASSERT(parent->aid.value == 0);
-
-		// Verify every archive belongs to this parent.
-		for (uint32_t i = 0; i < numArchives; ++i) {
-			node* n = getNodeByArchiveId(archives[i]);
-			if (!n)
-				return false;
-			if (n->parent != parent)
-				return false;
-			}
-
-		// Delete every child.
-		while (!parent->children.empty()) {
-			node* child = parent->children.back();
-			parent->children.pop_back();
-			clearLookup(child->aid);
-			STTSAV_DEL(child, sizeof(node));
-			}
-		// Parent becomes an archive again.
-		parent->aid = getNextId();
-		insertLookup(parent);
-		return true;
+		return DictionaryMergeHelper<node,unpackedKey>::mergeArchivesWorker(mLookup, archives, numArchives);
 		}
+}
+namespace sttSav
+{
+  void PlanetaryFaceUVArchiveDictionary::dbgDump () const
+                             { root.dumpNode(0); }
 }
 #undef LZZ_INLINE
 #undef LZZ_OVERRIDE

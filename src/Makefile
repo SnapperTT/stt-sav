@@ -5,12 +5,14 @@ USE_STTR=
 
 LAZY=../../lzz-bin/lzz -hx hh
 # Files are combined into single header
-RAWSOURCES=example.lzz sttSav.lzz splitBucket.lzz stringEncoder.lzz binaryValueWriter.lzz planetaryFaceUVArchiveDictionary.lzz
-SINGLEHEADER_SRC=sttSav.h2 splitBucket.h2 stringEncoder.h2 binaryValueWriter.h2
+RAWSOURCES=example.lzz sttSav.lzz splitBucket.lzz dictionaryLookup.lzz stringEncoder.lzz binaryValueWriter.lzz planetaryFaceUVArchiveDictionary.lzz
+SINGLEHEADER_SRC=sttSav.h2 splitBucket.h2 dictionaryLookup.h2 stringEncoder.h2 binaryValueWriter.h2
 SINGLEHEADER_OUT=stt-sav.h
 # Pages optional sub-module
 PAGES_SRC=planetaryFaceUVArchiveDictionary.h2
 PAGES_OUT=planetaryFaceUVArchiveDictionary.h
+XY_SRC=XYArchiveDictionary.h2
+XY_OUT=XYArchiveDictionary.h
 # Files that are discrete files 
 EXTRAHEADER_H=
 EXTRAHEADER_CPP=example.h2
@@ -28,6 +30,7 @@ SOURCES=$(addprefix $(TEMPDIR), $(RAWSOURCES:.lzz=.cpp))
 SFI=$(addprefix $(OUTPUTDIR), $(RAWSOURCES:.lzz=.h))
 OSINGLEHEADER_OUT=$(OUTPUTDIR)$(SINGLEHEADER_OUT)
 OPAGES_OUT=$(OUTPUTDIR)$(PAGES_OUT)
+OXY_OUT=$(OUTPUTDIR)$(XY_OUT)
 OEXTRAHEADER_OUT=$(addprefix $(OUTPUTDIR), $(EXTRAHEADER_H:.h2=.h)) $(addprefix $(OUTPUTDIR), $(EXTRAHEADER_CPP:.h2=.cpp))
 
 ########################################################################
@@ -38,7 +41,7 @@ all:
 #	$(MAKE) sttr
 
 .PHONY: all_base
-all_base: $(OSINGLEHEADER_OUT) $(OEXTRAHEADER_OUT) $(OPAGES_OUT) $(OUTPUTDIR)
+all_base: $(OSINGLEHEADER_OUT) $(OEXTRAHEADER_OUT) $(OPAGES_OUT) $(OXY_OUT) $(OUTPUTDIR)
 	@echo Done
 
 .PHONY: sttr
@@ -68,6 +71,9 @@ $(OSINGLEHEADER_OUT): $(addprefix $(TEMPDIR), $(SINGLEHEADER_SRC)) $(OUTPUTDIR)
 	
 $(OPAGES_OUT): $(addprefix $(TEMPDIR), $(PAGES_SRC)) $(OUTPUTDIR)
 	cat $(addprefix $(TEMPDIR), $(PAGES_SRC)) > $(OPAGES_OUT)
+	
+$(OXY_OUT): $(addprefix $(TEMPDIR), $(XY_SRC)) $(OUTPUTDIR)
+	cat $(addprefix $(TEMPDIR), $(XY_SRC)) > $(OXY_OUT)
 
 $(OUTPUTDIR)%.h: $(TEMPDIR)%.h2 $(OUTPUTDIR)
 	mv -f $< $@

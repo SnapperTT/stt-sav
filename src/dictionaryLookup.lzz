@@ -1,0 +1,171 @@
+// common lookup node struct for  XYArchiveDictionary and PlanteryUVArchiveDictionary
+#hdr
+#end
+
+#src
+// empty .cpp file
+#end
+
+namespace sttSav {
+
+template<typename NODE, typename UNPACKED_KEY>
+class DictionaryLookup {
+public:
+	struct nodeLookup {
+		archiveId aid;
+		NODE* ptr;
+		};
+	STTSAV_VECTOR<nodeLookup> mLookup;
+	
+	void reserveIds(const uint32_t numIds) {
+		if (numIds <= mLookup.size()) return;
+		uint32_t start = mLookup.size();
+		mLookup.resize(numIds);
+		for (uint32_t i = start; i < numIds; ++i) {
+			mLookup[i].aid.value = i + 1;
+			mLookup[i].ptr = NULL;
+			}
+		}
+	
+	void rebuildLookupArray(NODE* root) {
+		mLookup.clear();
+		rebuildLookupArrayWorker(root);
+		}
+	
+	void rebuildLookupArrayWorker(NODE* working) {
+		insertLookup(working);
+		for (NODE* c : working->children)
+			rebuildLookupArrayWorker(c);
+		}
+	
+	archiveId getNextId() {
+		for (uint32_t i = 0; i < mLookup.size(); ++i) {
+			if (mLookup[i].ptr == NULL)
+				return mLookup[i].aid;
+			}
+		// all slots are full
+		nodeLookup l;
+		l.aid.value = mLookup.size()+1;
+		l.ptr = NULL;
+		mLookup.push_back(l);
+		return l.aid;
+		}
+		
+	
+	archiveId getArchiveId(const archiveKey key, NODE* root) const {
+		// Searches the entire tree for an archive for a specified key
+		NODE* n = lookup(root, key);
+		if (n)
+			return n->aid;
+		return {0};
+		}
+		
+	NODE* getNodeByArchiveId (const archiveId aid) const {
+		if (aid.value && aid.value-1 < mLookup.size())
+			return mLookup[aid.value-1].ptr;
+		return NULL;
+		}
+		
+	void insertLookup(NODE* n) {
+		reserveIds(n->aid.value-1);
+		mLookup[n->aid.value-1].ptr = n;
+		}
+		
+	void clearLookup(const archiveId aid) {
+		if (aid.value && aid.value < mLookup.size())
+			mLookup[aid.value-1].ptr = NULL;
+		}
+	
+	static NODE* lookup(NODE* start, const UNPACKED_KEY& key) {
+		NODE* current = start;
+		while (current) {
+			NODE* exact = NULL;
+			NODE* remainder = NULL;
+			
+			if (!current->children.size())
+				return current;
+			for (NODE* child : current->children) {
+				if (child->containsExact(key)) {
+					exact = child;
+					break;
+					}
+				else if (child->isRemainder())
+					remainder = child;
+				}
+			if (exact)
+				current = exact;
+			else if (remainder)
+				current = remainder;
+			else
+				return current;
+			}
+		return NULL;
+		}
+	};
+	
+template<typename NODE, typename UNPACKED_KEY>
+class DictionaryMergeHelper {
+public:
+	static bool getMergeCandidatesWorker(const DictionaryLookup<NODE,UNPACKED_KEY>& mLookup, const archiveId id, archiveId* archivesOut, uint32_t& numArchivesOut, const uint32_t maxArchivesOut) {
+		numArchivesOut = 0;
+		NODE* n = mLookup.getNodeByArchiveId(id);
+		if (!n)
+			return false;
+		NODE* parent = n->parent;
+		if (!parent)
+			return false;
+
+		// Parent must be a routing node.
+		if (parent->aid.value != 0)
+			return false;
+			
+		// Root and PLANET-R are never merged.
+		if (!n->isAllowedToMerge())
+			return false;
+			
+		for (const NODE* child : parent->children) {
+			if (!child->aid.value)
+				return false; // malformed routing node
+			STTSAV_ASSERT(numArchivesOut < maxArchivesOut);
+			archivesOut[numArchivesOut++] = child->aid;
+			}
+		return numArchivesOut != 0;
+		}
+		
+	static bool mergeArchivesWorker(DictionaryLookup<NODE,UNPACKED_KEY>& mLookup, const archiveId* archives, const uint32_t numArchives) {
+		if (!numArchives)
+			return false;
+
+		NODE* first = mLookup.getNodeByArchiveId(archives[0]);
+		if (!first)
+			return false;
+		NODE* parent = first->parent;
+		if (!parent)
+			return false;
+
+		// Parent must currently be routing.
+		STTSAV_ASSERT(parent->aid.value == 0);
+
+		// Verify every archive belongs to this parent.
+		for (uint32_t i = 0; i < numArchives; ++i) {
+			NODE* n = mLookup.getNodeByArchiveId(archives[i]);
+			if (!n)
+				return false;
+			if (n->parent != parent)
+				return false;
+			}
+
+		// Delete every child.
+		while (!parent->children.empty()) {
+			NODE* child = parent->children.back();
+			parent->children.pop_back();
+			mLookup.clearLookup(child->aid);
+			STTSAV_DEL(child, sizeof(NODE));
+			}
+		// Parent becomes an archive again.
+		parent->aid = mLookup.getNextId();
+		mLookup.insertLookup(parent);
+		return true;
+		}
+	};
+} // namespace sttSav

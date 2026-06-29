@@ -46,6 +46,94 @@ using std::printf;
 // PlantartyFace archive system
 #include <algorithm>
 #include "planetaryFaceUVArchiveDictionary.h"
+#include "XYArchiveDictionary.h"
+
+// Helper functions
+namespace sttSav {
+void testSplitting(ArchiveDictionaryI& dic, const archiveId aid, STT_SAV_VECTOR<recordInfo>& records) {
+	// Tests splitting a dictionary based on oversized records
+	struct workItem {
+		archiveId aid;
+		STTSAV_VECTOR<recordInfo> records;
+		};
+
+	STTSAV_VECTOR<workItem> queue;
+
+	workItem start;
+	start.aid = aid;
+	start.records = records;
+	queue.push_back(start);
+	
+	int split = 0;
+
+	while (!queue.empty()) {
+		workItem w = std::move(queue.back());
+		queue.pop_back();
+		splitResult results[32];
+		uint32_t numResults;
+
+		bool ok = dic.splitArchive( w.aid, w.records, 4000, results, numResults, 32);
+		
+		printf("split result input %i - ok? %b\n", (int)w.aid.value, ok);
+		for (uint32_t i = 0; i < numResults; ++i) 
+			printf("  archive %u size %u\n", results[i].aid.value, results[i].size);
+			
+		if (!ok)
+			continue;
+
+		workItem next[32];
+		for (uint32_t i = 0; i < numResults; ++i)
+			next[i].aid = results[i].aid;
+
+		// Redistribute records.
+		for (const recordInfo& r : w.records) {
+			archiveId aid = dic.getArchiveIdFromShortlist(r.key, results, numResults);
+
+			for (uint32_t i = 0; i < numResults; ++i) {
+				if (results[i].aid.value == aid.value) {
+					next[i].records.push_back(r);
+					break;
+					}
+				}
+			}
+		
+		// Queue oversized children.
+		for (uint32_t i = 0; i < numResults; ++i) {
+			if (results[i].size > 4000)
+				queue.push_back(std::move(next[i]));
+			}
+		
+		// split result:
+			
+		// Print tree
+		printf("split %i:\n", split);
+		dic.dbgDump();
+		split++;
+		printf("\n");
+		}
+	}
+	
+void testMerging(ArchiveDictionaryI& dic, const archiveId aid, const int mergeId) {
+	archiveId arBuf[32];
+	uint32_t numArchives;
+	
+	if (dic.getMergeCandidates(aid, arBuf, numArchives, 32)) {
+		bool ok = dic.mergeArchives(arBuf, numArchives);
+		
+		if (ok) {
+			// Print tree
+			printf("merge %i:\n", mergeId);
+			dic.dbgDump();
+			printf("\n");
+			}
+		else
+			printf("merge %i failed\n", mergeId);
+		}
+	else {
+		printf("merge %i failed\n", mergeId);
+		}
+	}
+} // namespace sttSav
 
 #define LZZ_INLINE inline
 int main (int argc, char * * argv)
@@ -54,11 +142,12 @@ int main (int argc, char * * argv)
 	
 	// Test planetary dictionary
 	using namespace sttSav;
-	PlanetaryFaceUVArchiveDictionary pdic;
-	ArchiveManager AM(&pdic);
 	
-	{
+	if (0) {
 		// TEST - planetary down
+		PlanetaryFaceUVArchiveDictionary pdic;
+		ArchiveManager AM(&pdic);
+		
 		STTSAV_VECTOR<recordInfo> records;
 
 		// Planet 0 (large)
@@ -102,139 +191,95 @@ int main (int argc, char * * argv)
 			}
 			
 		pdic.initNewDictionary();
-		struct workItem {
-			archiveId aid;
-			STTSAV_VECTOR<recordInfo> records;
-			};
-
-		STTSAV_VECTOR<workItem> queue;
-
-		workItem start;
-		start.aid = pdic.root.children[0]->aid;
-		start.records = records;
-		queue.push_back(start);
 		
-		int split = 0;
-
-		while (!queue.empty()) {
-			workItem w = std::move(queue.back());
-			queue.pop_back();
-			splitResult results[32];
-			uint32_t numResults;
-
-			bool ok = pdic.splitArchive( w.aid, w.records, 4000, results, numResults, 32);
-			
-			printf("split result input %i - ok? %b\n", (int)w.aid.value, ok);
-			for (uint32_t i = 0; i < numResults; ++i) 
-				printf("  archive %u size %u\n", results[i].aid.value, results[i].size);
-				
-			if (!ok)
-				continue;
-
-			workItem next[32];
-			for (uint32_t i = 0; i < numResults; ++i)
-				next[i].aid = results[i].aid;
-
-			// Redistribute records.
-			for (const recordInfo& r : w.records) {
-				archiveId aid = pdic.getArchiveIdFromShortlist(r.key, results, numResults);
-
-				for (uint32_t i = 0; i < numResults; ++i) {
-					if (results[i].aid.value == aid.value) {
-						next[i].records.push_back(r);
-						break;
-					}
-				}
-			}
-			// Queue oversized children.
-			for (uint32_t i = 0; i < numResults; ++i) {
-				if (results[i].size > 4000)
-					queue.push_back(std::move(next[i]));
-				}
-			
-			// split result:
-				
-			// Print tree
-			printf("split %i:\n", split);
-			pdic.root.dumpNode(0);
-			split++;
-			printf("\n");
-			}
-		
+		// Test splitting
+		testSplitting(pdic, {pdic.root.children[0]->aid}, records);
 		
 		// Test merging
-		{
-			archiveId arBuf[32];
-			uint32_t numArchives;
-			
-			int mergeId = 1;
+		testMerging(pdic, {13}, 1);
+		testMerging(pdic, {2}, 2);
+		testMerging(pdic, {2}, 3);
 		
-			if (pdic.getMergeCandidates({13}, arBuf, numArchives, 32)) {
-				bool ok = pdic.mergeArchives(arBuf, numArchives);
-				
-				if (ok) {
-					// Print tree
-					printf("merge %i:\n", mergeId);
-					pdic.root.dumpNode(0);
-					printf("\n");
-					}
-				else
-					printf("merge %i failed\n", mergeId);
-				}
-			else {
-				printf("merge %i failed\n", mergeId);
-				}
-			
-			mergeId++;
-		
-			if (pdic.getMergeCandidates({2}, arBuf, numArchives, 32)) {
-				bool ok = pdic.mergeArchives(arBuf, numArchives);
-				
-				if (ok) {
-					// Print tree
-					printf("merge %i:\n", mergeId);
-					pdic.root.dumpNode(0);
-					printf("\n");
-					}
-				else
-					printf("merge %i failed\n", mergeId);
-				}
-			else {
-				printf("merge %i failed\n", mergeId);
-				}
-				
-			if (pdic.getMergeCandidates({2}, arBuf, numArchives, 32)) {
-				bool ok = pdic.mergeArchives(arBuf, numArchives);
-				
-				if (ok) {
-					// Print tree
-					printf("merge %i:\n", mergeId);
-					pdic.root.dumpNode(0);
-					printf("\n");
-					}
-				else
-					printf("merge %i failed\n", mergeId);
-				}
-			else {
-				printf("merge %i failed\n", mergeId);
-				}
-				
-			mergeId++;
-		}
+		// print the status of the dictionary
+		//pdic.dbgDump();
 		
 		// Test encoding
 		{
+		// Encode with BinaryWriter
 		STTSAV_STRING buff;
 		StringEncoder enc(buff);
 		BinaryWriter w(&enc);
 		pdic.root.encode(w);
 		
+		// Debug dump the 
 		StringDecoder dec(buff);
 		BinaryValue v(&dec);
-		
 		printf ("pidc.root: %s\n", v.toDbgString().c_str());
 		}
 		}
+	if (0) {
+		// TEST - XY dictionary
+		XYArchiveDictionary xydic;
+		ArchiveManager AM(&xydic);
+
+		STTSAV_VECTOR<recordInfo> records;
+
+		// Large cluster (NW)
+		for (uint32_t i = 0; i < 50; ++i) {
+			recordInfo r;
+			r.key = xydic.buildKey(-32000 + (i % 64)*8,  -32000 + (i % 64)*8);
+			r.record.value = i + 1;
+			r.offset = 0;
+			r.length = 100;
+			records.push_back(r);
+			}
+
+		// Medium cluster (SE)
+		for (uint32_t i = 0; i < 30; ++i) {
+			recordInfo r;
+			r.key = xydic.buildKey(30000 + (i % 64)*8,  30000 + (i % 64)*8);
+			r.record.value = 100 + i;
+			r.offset = 0;
+			r.length = 100;
+			records.push_back(r);
+			}
+
+		// Small cluster (NE)
+		for (uint32_t i = 0; i < 10; ++i) {
+			recordInfo r;
+			r.key = xydic.buildKey(30000 + (i % 64)*8, -32000 + (i % 64)*8);
+			r.record.value = 200 + i;
+			r.offset = 0;
+			r.length = 100;
+			records.push_back(r);
+			}
+
+		xydic.initNewDictionary();
+
+		// Split repeatedly
+		testSplitting(xydic, xydic.root.children[0]->aid, records);
+
+		// Merge back together.
+		testMerging(xydic, {2}, 1);
+		testMerging(xydic, {2}, 2);
+		testMerging(xydic, {2}, 3);
+		testMerging(xydic, {2}, 4);
+
+		// Dump final tree.
+		//xydic.dbgDump();
+
+		// Test encode/decode.
+		{
+			STTSAV_STRING buff;
+			StringEncoder enc(buff);
+			BinaryWriter w(&enc);
+			xydic.root.encode(w);
+
+			StringDecoder dec(buff);
+			BinaryValue v(&dec);
+			printf("xydic.root: %s\n", v.toDbgString().c_str());
+		}
+	}
 	
 	printf("Exiting example...\n");
 	return 0;

@@ -32,8 +32,7 @@ public:
 	/// independent of the archive storage format.
 	///
 	/// Different applications may implement different dictionary strategies
-	/// (planetary quadtree, fixed grid, hash table, etc.) while sharing the same
-	/// archive storage engine.
+	/// (planetary quadtree, fixed grid, hash table, etc.)
 	
 	inline ArchiveDictionaryI() {}
 	virtual ~ArchiveDictionaryI() {}
@@ -64,6 +63,8 @@ public:
 	// Commits the merge in the dictionary, from the list provided by getMergeCandidates
 	virtual bool mergeArchives(const archiveId* archives, const uint32_t numArchives) = 0;
 	
+	// printf's to stdout this dictonary
+	virtual void dbgDump() const {}
 	};
 	
 struct transactionMode {
