@@ -729,6 +729,7 @@ namespace sttSav
     uint64_t offset;
   public:
     BinaryValue ();
+    BinaryValue (StringDecoder * _dec);
   protected:
     uint8_t getBvType () const;
     uint64_t payloadOffset () const;
@@ -736,27 +737,36 @@ namespace sttSav
     uint32_t getMemberCount () const;
     uint64_t childOffset () const;
     uint64_t nextOffset () const;
+    int64_t getInteger () const;
+    double getFloating () const;
   public:
+    bool IsValid () const;
     bool IsArray () const;
     bool IsObject () const;
     bool IsString () const;
     bool IsBool () const;
     bool IsNumber () const;
     uint32_t Size () const;
-    int GetInt () const;
-    uint32_t GetUint () const;
+    int8_t GetInt8 () const;
+    int16_t GetInt16 () const;
     int32_t GetInt32 () const;
-    uint32_t GetUint32 () const;
     int64_t GetInt64 () const;
+    int32_t GetInt () const;
+    uint8_t GetUint8 () const;
+    uint16_t GetUint16 () const;
+    uint32_t GetUint32 () const;
     uint64_t GetUint64 () const;
+    uint32_t GetUint () const;
     float GetFloat () const;
-    double GetDouble () const;
+    float GetDouble () const;
     bool GetBool () const;
     STTSAV_STRING GetString () const;
     void GetStringRef (STTSAV_STRING & out) const;
     uint32_t GetStringLength () const;
-    BinaryValue operator [] (uint32_t index);
-    BinaryValue operator [] (char const * key);
+    BinaryValue operator [] (uint32_t index) const;
+    BinaryValue operator [] (char const * key) const;
+    STTSAV_STRING toDbgString () const;
+    STTSAV_STRING toDbgStringIndented (uint32_t indent) const;
   };
 }
 namespace sttSav
@@ -775,6 +785,7 @@ namespace sttSav
     STT_SAV_VECTOR <scope> stack;
   public:
     BinaryWriter ();
+    BinaryWriter (StringEncoder * _enc);
   protected:
     void onValueWritten ();
     void startContainer (uint8_t const bvType, bool const isObject);
@@ -810,6 +821,12 @@ namespace sttSav
   LZZ_INLINE BinaryValue::BinaryValue ()
     : dec (NULL), offset (0)
                                                 {}
+}
+namespace sttSav
+{
+  LZZ_INLINE BinaryValue::BinaryValue (StringDecoder * _dec)
+    : dec (_dec), offset (0)
+                                                                  {}
 }
 namespace sttSav
 {
@@ -893,6 +910,11 @@ namespace sttSav
 }
 namespace sttSav
 {
+  LZZ_INLINE bool BinaryValue::IsValid () const
+                                    { return dec; }
+}
+namespace sttSav
+{
   LZZ_INLINE bool BinaryValue::IsArray () const
                                     {
 		return getBvType() == bvConstants::BV_ARRAY;
@@ -936,76 +958,77 @@ namespace sttSav
 }
 namespace sttSav
 {
-  LZZ_INLINE int BinaryValue::GetInt () const
-                                  {
-		return GetInt32();
-		}
+  LZZ_INLINE int8_t BinaryValue::GetInt8 () const
+                                      { return getInteger(); }
 }
 namespace sttSav
 {
-  LZZ_INLINE uint32_t BinaryValue::GetUint () const
-                                        {
-		return GetUint32();
-		}
+  LZZ_INLINE int16_t BinaryValue::GetInt16 () const
+                                        { return getInteger(); }
 }
 namespace sttSav
 {
   LZZ_INLINE int32_t BinaryValue::GetInt32 () const
-                                        {
-		int32_t v;
-		dec->parseAt(payloadOffset(), v);
-		return v;
-		}
-}
-namespace sttSav
-{
-  LZZ_INLINE uint32_t BinaryValue::GetUint32 () const
-                                          {
-		uint32_t v;
-		dec->parseAt(payloadOffset(), v);
-		return v;
-		}
+                                        { return getInteger(); }
 }
 namespace sttSav
 {
   LZZ_INLINE int64_t BinaryValue::GetInt64 () const
-                                        {
-		int64_t v;
-		dec->parseAt(payloadOffset(), v);
-		return v;
-		}
+                                        { return getInteger(); }
+}
+namespace sttSav
+{
+  LZZ_INLINE int32_t BinaryValue::GetInt () const
+                                      { return GetInt32(); }
+}
+namespace sttSav
+{
+  LZZ_INLINE uint8_t BinaryValue::GetUint8 () const
+                                        { return getInteger(); }
+}
+namespace sttSav
+{
+  LZZ_INLINE uint16_t BinaryValue::GetUint16 () const
+                                          { return getInteger(); }
+}
+namespace sttSav
+{
+  LZZ_INLINE uint32_t BinaryValue::GetUint32 () const
+                                          { return getInteger(); }
 }
 namespace sttSav
 {
   LZZ_INLINE uint64_t BinaryValue::GetUint64 () const
                                           {
-		uint64_t v;
-		dec->parseAt(payloadOffset(), v);
-		return v;
+		if (getBvType() == bvConstants::BV_UINT64) {
+			uint64_t v;
+			dec->parseAt(payloadOffset(), v);
+			return v;
+			}
+		return getInteger();
 		}
+}
+namespace sttSav
+{
+  LZZ_INLINE uint32_t BinaryValue::GetUint () const
+                                        { return GetUint32(); }
 }
 namespace sttSav
 {
   LZZ_INLINE float BinaryValue::GetFloat () const
-                                      {
-		float v;
-		dec->parseAt(payloadOffset(), v);
-		return v;
-		}
+                                      { return getFloating(); }
 }
 namespace sttSav
 {
-  LZZ_INLINE double BinaryValue::GetDouble () const
-                                        {
-		double v;
-		dec->parseAt(payloadOffset(), v);
-		return v;
-		}
+  LZZ_INLINE float BinaryValue::GetDouble () const
+                                       { return getFloating(); }
 }
 namespace sttSav
 {
   LZZ_INLINE bool BinaryValue::GetBool () const
                                     {
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsBool());
 		uint8_t v;
 		dec->parseAt(payloadOffset(), v);
 		return v != 0;
@@ -1015,6 +1038,8 @@ namespace sttSav
 {
   LZZ_INLINE uint32_t BinaryValue::GetStringLength () const
                                                 {
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsString());
 		StringDecoder d(*dec);
 		d.seek = payloadOffset();
 		return (uint32_t)d.parseSize();
@@ -1025,6 +1050,12 @@ namespace sttSav
   LZZ_INLINE BinaryWriter::BinaryWriter ()
     : enc (NULL)
                                           {}
+}
+namespace sttSav
+{
+  LZZ_INLINE BinaryWriter::BinaryWriter (StringEncoder * _enc)
+    : enc (_enc)
+                                                            {}
 }
 namespace sttSav
 {
@@ -1244,8 +1275,138 @@ namespace sttSav
 #define LZZ_INLINE inline
 namespace sttSav
 {
+  int64_t BinaryValue::getInteger () const
+                                   {
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsNumber());
+
+		switch (getBvType()) {
+			case bvConstants::BV_INT8: {
+				int8_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_INT16: {
+				int16_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_INT32: {
+				int32_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_INT64: {
+				int64_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_UINT8: {
+				uint8_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_UINT16: {
+				uint16_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_UINT32: {
+				uint32_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_UINT64: {
+				uint64_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_FLOAT: {
+				float v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_DOUBLE: {
+				double v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			default:
+				STTSAV_ASSERT(false);
+				return 0;
+			}
+		}
+}
+namespace sttSav
+{
+  double BinaryValue::getFloating () const
+                                   {
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsNumber());
+
+		switch (getBvType()) {
+			case bvConstants::BV_INT8: {
+				int8_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_INT16: {
+				int16_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_INT32: {
+				int32_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_INT64: {
+				int64_t v;
+				dec->parseAt(payloadOffset(), v);
+				return (double)v;
+				}
+			case bvConstants::BV_UINT8: {
+				uint8_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_UINT16: {
+				uint16_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_UINT32: {
+				uint32_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_UINT64: {
+				uint64_t v;
+				dec->parseAt(payloadOffset(), v);
+				return (double)v;
+				}
+			case bvConstants::BV_FLOAT: {
+				float v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_DOUBLE: {
+				double v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			default:
+				STTSAV_ASSERT(false);
+				return 0.0;
+			}
+		}
+}
+namespace sttSav
+{
   STTSAV_STRING BinaryValue::GetString () const
                                         {
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsString());
 		STTSAV_STRING out;
 		GetStringRef(out);
 		return out;
@@ -1255,6 +1416,8 @@ namespace sttSav
 {
   void BinaryValue::GetStringRef (STTSAV_STRING & out) const
                                                     {
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsString());
 		StringDecoder d(*dec);
 		d.seek = payloadOffset();
 		d.parseString(out);
@@ -1262,8 +1425,9 @@ namespace sttSav
 }
 namespace sttSav
 {
-  BinaryValue BinaryValue::operator [] (uint32_t index)
-                                               {
+  BinaryValue BinaryValue::operator [] (uint32_t index) const
+                                                     {
+		STTSAV_ASSERT(IsValid());
 		STTSAV_ASSERT(IsArray());
 		STTSAV_ASSERT(index < Size());
 
@@ -1284,8 +1448,9 @@ namespace sttSav
 }
 namespace sttSav
 {
-  BinaryValue BinaryValue::operator [] (char const * key)
-                                                {
+  BinaryValue BinaryValue::operator [] (char const * key) const
+                                                       {
+		STTSAV_ASSERT(IsValid());
 		STTSAV_ASSERT(IsObject());
 		
 		uint64_t off = childOffset();
@@ -1309,6 +1474,133 @@ namespace sttSav
 			off = v.nextOffset();
 			}
 		return BinaryValue();
+		}
+}
+namespace sttSav
+{
+  STTSAV_STRING BinaryValue::toDbgString () const
+                                          {
+		return toDbgStringIndented(0);
+		}
+}
+namespace sttSav
+{
+  STTSAV_STRING BinaryValue::toDbgStringIndented (uint32_t indent) const
+                                                                 {
+		// Prints a human readable debug string
+		constexpr uint32_t BUFFER_SIZE = 128;
+		char buff[BUFFER_SIZE];
+		STTSAV_STRING out;
+
+		auto doIndent = [&](uint32_t n) {
+			for (uint32_t i = 0; i < n; ++i)
+				out += "    ";
+			};
+
+		if (!IsValid()) {
+			out += "<invalid>";
+			return out;
+			}
+
+		switch (getBvType()) {
+			case bvConstants::BV_EMPTY:
+				out += "(null)";
+				break;
+			case bvConstants::BV_BOOL:
+				out += "(bool) ";
+				out += GetBool() ? "true" : "false";
+				break;
+			case bvConstants::BV_INT8:
+				snprintf(buff, BUFFER_SIZE, "(int8) %d", (int)GetInt8());
+				out += buff;
+				break;
+			case bvConstants::BV_INT16:
+				snprintf(buff, BUFFER_SIZE, "(int16) %d", (int)GetInt16());
+				out += buff;
+				break;
+			case bvConstants::BV_INT32:
+				snprintf(buff, BUFFER_SIZE, "(int32) %d", GetInt32());
+				out += buff;
+				break;
+			case bvConstants::BV_INT64:
+				snprintf(buff, BUFFER_SIZE, "(int64) %lld", (long long)GetInt64());
+				out += buff;
+				break;
+			case bvConstants::BV_UINT8:
+				snprintf(buff, BUFFER_SIZE, "(uint8) %u", (unsigned)GetUint8());
+				out += buff;
+				break;
+			case bvConstants::BV_UINT16:
+				snprintf(buff, BUFFER_SIZE, "(uint16) %u", (unsigned)GetUint16());
+				out += buff;
+				break;
+			case bvConstants::BV_UINT32:
+				snprintf(buff, BUFFER_SIZE, "(uint32) %u", GetUint32());
+				out += buff;
+				break;
+			case bvConstants::BV_UINT64:
+				snprintf(buff, BUFFER_SIZE, "(uint64) %llu", (unsigned long long)GetUint64());
+				out += buff;
+				break;
+			case bvConstants::BV_FLOAT:
+				snprintf(buff, BUFFER_SIZE, "(float) %g", GetFloat());
+				out += buff;
+				break;
+			case bvConstants::BV_DOUBLE:
+				snprintf(buff, BUFFER_SIZE, "(double) %g", GetDouble());
+				out += buff;
+				break;
+			case bvConstants::BV_STRING:
+				out += "(string) \"";
+				out += GetString();
+				out += "\"";
+				break;
+			case bvConstants::BV_ARRAY:
+				out += "(array)\n";
+				doIndent(indent);
+				out += "[\n";
+				for (uint32_t i = 0; i < Size(); ++i) {
+					doIndent(indent + 1);
+					out += (*this)[i].toDbgStringIndented(indent + 1);
+					out += "\n";
+					}
+				doIndent(indent);
+				out += "]";
+				break;
+			case bvConstants::BV_OBJECT: {
+				out += "(object)\n";
+				doIndent(indent);
+				out += "{\n";
+				uint64_t off = childOffset();
+				for (uint32_t i = 0; i < Size(); ++i) {
+					StringDecoder d(*dec);
+					d.seek = off;
+					
+					STTSAV_STRING key;
+					d.parseString(key);
+
+					BinaryValue child;
+					child.dec = dec;
+					child.offset = d.seek;
+
+					doIndent(indent + 1);
+					out += key;
+					out += ": ";
+					out += child.toDbgStringIndented(indent + 1);
+					out += "\n";
+
+					off = child.nextOffset();
+					}
+
+				doIndent(indent);
+				out += "}";
+				break;
+				}
+			default:
+				out += "<unknown>";
+				break;
+			}
+		return out;
 		}
 }
 #undef LZZ_INLINE

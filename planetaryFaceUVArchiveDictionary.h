@@ -95,6 +95,8 @@ namespace sttSav
       STTSAV_VECTOR_PLANETNODE <node*> children;
       node ();
       ~ node ();
+      void encode (BinaryWriter & w) const;
+      void decode (BinaryValue const & val);
       bool canSplit () const;
       bool containsExact (unpackedKey const & k) const;
       bool isRemainder () const;
@@ -112,6 +114,8 @@ namespace sttSav
     void initNewDictionary ();
     archiveKey buildKey (uint16_t const planet, uint8_t const face, uint8_t const flags, uint8_t const localU, uint8_t const localV) const;
     void reserveIds (uint32_t const numIds);
+    void rebuildLookupArray ();
+    void rebuildLookupArrayWorker (node * working);
     archiveId getNextId ();
     archiveId getArchiveId (archiveKey const key) const;
     node * getNodeByArchiveId (archiveId const aid) const;
@@ -196,6 +200,54 @@ namespace sttSav
                          {
 			for (node* n : children)
 				STTSAV_DEL(n, sizeof(node));
+			}
+}
+namespace sttSav
+{
+  void PlanetaryFaceUVArchiveDictionary::node::encode (BinaryWriter & w) const
+                                                   {
+			w.StartObject();
+			w.Key("aid");    w.Uint32(aid.value);
+			w.Key("planet"); w.Uint16(planet);
+			w.Key("type");   w.Uint8(type);
+			w.Key("face");   w.Uint8(face);
+			w.Key("flags");  w.Uint8(flags);
+			w.Key("u"); w.Uint8(u);
+			w.Key("v"); w.Uint8(v);
+			w.Key("uvSize"); w.Uint8(uvSize);
+			
+			w.Key("children");
+			w.StartArray();
+				for (node* c : children)
+					c->encode(w);
+			w.EndArray();
+			w.EndObject();
+			}
+}
+namespace sttSav
+{
+  void PlanetaryFaceUVArchiveDictionary::node::decode (BinaryValue const & val)
+                                                    {
+			aid.value = val["aid"].GetUint32();
+			planet = val["planet"].GetUint16();
+			type   = val["type"].GetUint8();
+			face   = val["face"].GetUint8();
+			flags  = val["flags"].GetUint8();
+			u      = val["u"].GetUint8();
+			v      = val["v"].GetUint8();
+			uvSize = val["uvSize"].GetUint8();
+
+			parent = NULL;
+			BinaryValue childArray = val["children"];
+
+			STTSAV_ASSERT(childArray.IsArray());
+
+			for (uint32_t i = 0; i < childArray.Size(); ++i) {
+				node* c = STTSAV_NEW(node);
+				c->decode(childArray[i]);
+				c->parent = this;
+				children.push_back(c);
+				}
 			}
 }
 namespace sttSav
@@ -300,6 +352,23 @@ namespace sttSav
 			mLookup[i].aid.value = i + 1;
 			mLookup[i].ptr = NULL;
 			}
+		}
+}
+namespace sttSav
+{
+  void PlanetaryFaceUVArchiveDictionary::rebuildLookupArray ()
+                                  {
+		mLookup.clear();
+		rebuildLookupArrayWorker(&root);
+		}
+}
+namespace sttSav
+{
+  void PlanetaryFaceUVArchiveDictionary::rebuildLookupArrayWorker (node * working)
+                                                     {
+		insertLookup(working);
+		for (node* c : working->children)
+			rebuildLookupArrayWorker(c);
 		}
 }
 namespace sttSav

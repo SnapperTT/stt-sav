@@ -222,6 +222,18 @@ int main (int argc, char * * argv)
 			mergeId++;
 		}
 		
+		// Test encoding
+		{
+		STTSAV_STRING buff;
+		StringEncoder enc(buff);
+		BinaryWriter w(&enc);
+		pdic.root.encode(w);
+		
+		StringDecoder dec(buff);
+		BinaryValue v(&dec);
+		
+		printf ("pidc.root: %s\n", v.toDbgString().c_str());
+		}
 		}
 	
 	printf("Exiting example...\n");

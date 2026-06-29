@@ -36,8 +36,8 @@ public:
     StringDecoder *dec;
     uint64_t offset; // where in dec is this value?
 public:
-
     inline BinaryValue() : dec(NULL), offset(0) {}
+    inline BinaryValue(StringDecoder*_dec) : dec(_dec), offset(0) {}
 
 protected:
 	// helpers
@@ -103,7 +103,132 @@ protected:
 			}
 		}
 
+	int64_t getInteger() const {
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsNumber());
+
+		switch (getBvType()) {
+			case bvConstants::BV_INT8: {
+				int8_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_INT16: {
+				int16_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_INT32: {
+				int32_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_INT64: {
+				int64_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_UINT8: {
+				uint8_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_UINT16: {
+				uint16_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_UINT32: {
+				uint32_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_UINT64: {
+				uint64_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_FLOAT: {
+				float v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_DOUBLE: {
+				double v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			default:
+				STTSAV_ASSERT(false);
+				return 0;
+			}
+		}
+
+
+	double getFloating() const {
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsNumber());
+
+		switch (getBvType()) {
+			case bvConstants::BV_INT8: {
+				int8_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_INT16: {
+				int16_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_INT32: {
+				int32_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_INT64: {
+				int64_t v;
+				dec->parseAt(payloadOffset(), v);
+				return (double)v;
+				}
+			case bvConstants::BV_UINT8: {
+				uint8_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_UINT16: {
+				uint16_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_UINT32: {
+				uint32_t v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_UINT64: {
+				uint64_t v;
+				dec->parseAt(payloadOffset(), v);
+				return (double)v;
+				}
+			case bvConstants::BV_FLOAT: {
+				float v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			case bvConstants::BV_DOUBLE: {
+				double v;
+				dec->parseAt(payloadOffset(), v);
+				return v;
+				}
+			default:
+				STTSAV_ASSERT(false);
+				return 0.0;
+			}
+		}
+
 public:
+	inline bool IsValid() const { return dec; }
+
 	inline bool IsArray() const {
 		return getBvType() == bvConstants::BV_ARRAY;
 		}
@@ -129,75 +254,63 @@ public:
 		return getMemberCount();
 		}
 		
-	inline int GetInt() const {
-		return GetInt32();
-		}
+	
+	inline int8_t GetInt8() const { return getInteger(); }
+	inline int16_t GetInt16() const { return getInteger(); }
+	inline int32_t GetInt32() const { return getInteger(); }
+	inline int64_t GetInt64() const { return getInteger(); }
+	inline int32_t GetInt() const { return GetInt32(); }
 
-	inline uint32_t GetUint() const {
-		return GetUint32();
-		}
-		
-	inline int32_t GetInt32() const {
-		int32_t v;
-		dec->parseAt(payloadOffset(), v);
-		return v;
-		}
-
-	inline uint32_t GetUint32() const {
-		uint32_t v;
-		dec->parseAt(payloadOffset(), v);
-		return v;
-		}
-		
-	inline int64_t GetInt64() const {
-		int64_t v;
-		dec->parseAt(payloadOffset(), v);
-		return v;
-		}
-
+	inline uint8_t GetUint8() const { return getInteger(); }
+	inline uint16_t GetUint16() const { return getInteger(); }
+	inline uint32_t GetUint32() const { return getInteger(); }
 	inline uint64_t GetUint64() const {
-		uint64_t v;
-		dec->parseAt(payloadOffset(), v);
-		return v;
+		if (getBvType() == bvConstants::BV_UINT64) {
+			uint64_t v;
+			dec->parseAt(payloadOffset(), v);
+			return v;
+			}
+		return getInteger();
 		}
+	inline uint32_t GetUint() const { return GetUint32(); }
 
-	inline float GetFloat() const {
-		float v;
-		dec->parseAt(payloadOffset(), v);
-		return v;
-		}
-
-	inline double GetDouble() const {
-		double v;
-		dec->parseAt(payloadOffset(), v);
-		return v;
-		}
+	inline float GetFloat() const { return getFloating(); }
+	inline float GetDouble() const { return getFloating(); }
 
 	inline bool GetBool() const {
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsBool());
 		uint8_t v;
 		dec->parseAt(payloadOffset(), v);
 		return v != 0;
 		}
 
 	STTSAV_STRING GetString() const {
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsString());
 		STTSAV_STRING out;
 		GetStringRef(out);
 		return out;
 		}
 		
 	void GetStringRef(STTSAV_STRING& out) const {
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsString());
 		StringDecoder d(*dec);
 		d.seek = payloadOffset();
 		d.parseString(out);
 		}
 
 	inline uint32_t GetStringLength() const {
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsString());
 		StringDecoder d(*dec);
 		d.seek = payloadOffset();
 		return (uint32_t)d.parseSize();
 		}
 	
-	BinaryValue operator[](uint32_t index) {
+	BinaryValue operator[](uint32_t index) const {
+		STTSAV_ASSERT(IsValid());
 		STTSAV_ASSERT(IsArray());
 		STTSAV_ASSERT(index < Size());
 
@@ -216,7 +329,8 @@ public:
 		return out;
 		}
 		
-	BinaryValue operator[](const char *key) {
+	BinaryValue operator[](const char *key) const  {
+		STTSAV_ASSERT(IsValid());
 		STTSAV_ASSERT(IsObject());
 		
 		uint64_t off = childOffset();
@@ -241,6 +355,127 @@ public:
 			}
 		return BinaryValue();
 		}
+		
+	STTSAV_STRING toDbgString() const {
+		return toDbgStringIndented(0);
+		}
+		
+	STTSAV_STRING toDbgStringIndented(uint32_t indent) const {
+		// Prints a human readable debug string
+		constexpr uint32_t BUFFER_SIZE = 128;
+		char buff[BUFFER_SIZE];
+		STTSAV_STRING out;
+
+		auto doIndent = [&](uint32_t n) {
+			for (uint32_t i = 0; i < n; ++i)
+				out += "    ";
+			};
+
+		if (!IsValid()) {
+			out += "<invalid>";
+			return out;
+			}
+
+		switch (getBvType()) {
+			case bvConstants::BV_EMPTY:
+				out += "(null)";
+				break;
+			case bvConstants::BV_BOOL:
+				out += "(bool) ";
+				out += GetBool() ? "true" : "false";
+				break;
+			case bvConstants::BV_INT8:
+				snprintf(buff, BUFFER_SIZE, "(int8) %d", (int)GetInt8());
+				out += buff;
+				break;
+			case bvConstants::BV_INT16:
+				snprintf(buff, BUFFER_SIZE, "(int16) %d", (int)GetInt16());
+				out += buff;
+				break;
+			case bvConstants::BV_INT32:
+				snprintf(buff, BUFFER_SIZE, "(int32) %d", GetInt32());
+				out += buff;
+				break;
+			case bvConstants::BV_INT64:
+				snprintf(buff, BUFFER_SIZE, "(int64) %lld", (long long)GetInt64());
+				out += buff;
+				break;
+			case bvConstants::BV_UINT8:
+				snprintf(buff, BUFFER_SIZE, "(uint8) %u", (unsigned)GetUint8());
+				out += buff;
+				break;
+			case bvConstants::BV_UINT16:
+				snprintf(buff, BUFFER_SIZE, "(uint16) %u", (unsigned)GetUint16());
+				out += buff;
+				break;
+			case bvConstants::BV_UINT32:
+				snprintf(buff, BUFFER_SIZE, "(uint32) %u", GetUint32());
+				out += buff;
+				break;
+			case bvConstants::BV_UINT64:
+				snprintf(buff, BUFFER_SIZE, "(uint64) %llu", (unsigned long long)GetUint64());
+				out += buff;
+				break;
+			case bvConstants::BV_FLOAT:
+				snprintf(buff, BUFFER_SIZE, "(float) %g", GetFloat());
+				out += buff;
+				break;
+			case bvConstants::BV_DOUBLE:
+				snprintf(buff, BUFFER_SIZE, "(double) %g", GetDouble());
+				out += buff;
+				break;
+			case bvConstants::BV_STRING:
+				out += "(string) \"";
+				out += GetString();
+				out += "\"";
+				break;
+			case bvConstants::BV_ARRAY:
+				out += "(array)\n";
+				doIndent(indent);
+				out += "[\n";
+				for (uint32_t i = 0; i < Size(); ++i) {
+					doIndent(indent + 1);
+					out += (*this)[i].toDbgStringIndented(indent + 1);
+					out += "\n";
+					}
+				doIndent(indent);
+				out += "]";
+				break;
+			case bvConstants::BV_OBJECT: {
+				out += "(object)\n";
+				doIndent(indent);
+				out += "{\n";
+				uint64_t off = childOffset();
+				for (uint32_t i = 0; i < Size(); ++i) {
+					StringDecoder d(*dec);
+					d.seek = off;
+					
+					STTSAV_STRING key;
+					d.parseString(key);
+
+					BinaryValue child;
+					child.dec = dec;
+					child.offset = d.seek;
+
+					doIndent(indent + 1);
+					out += key;
+					out += ": ";
+					out += child.toDbgStringIndented(indent + 1);
+					out += "\n";
+
+					off = child.nextOffset();
+					}
+
+				doIndent(indent);
+				out += "}";
+				break;
+				}
+			default:
+				out += "<unknown>";
+				break;
+			}
+		return out;
+		}
 	};
 
 
@@ -262,6 +497,7 @@ protected:
 
 public:
 	inline BinaryWriter() : enc(NULL) {}
+	inline BinaryWriter(StringEncoder*_enc) : enc(_enc) {}
 
 protected:
 	inline void onValueWritten() {
