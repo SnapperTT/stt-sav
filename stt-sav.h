@@ -30,6 +30,7 @@ struct splitResult {
     uint32_t size;
 	};
 
+
 class ArchiveDictionaryI {
 public:
 	/// Archive dictionary interface
@@ -71,10 +72,19 @@ public:
 	// Commits the merge in the dictionary, from the list provided by getMergeCandidates
 	virtual bool mergeArchives(const archiveId* archives, const uint32_t numArchives) = 0;
 	
+	// Returns the total number of archives in the dictionary. Set "archivesOut" to NULL to just query. numArchivesOut is the number of archives written to the archivesOut array
+	virtual uint32_t extractArchiveIds(archiveId* archivesOut, uint32_t& numArchivesOut, const uint32_t maxArchivesOut) const = 0;
+	
+	// Serialises this dictionary for disc storage
+	virtual STTSAV_STRING encodeDictionary() const = 0;
+	
+	// Decodes and initialises this dictionary. Returns the number of archives in the directory 
+	virtual uint32_t decodeDictionary(const STTSAV_STRING& data) = 0;
+	
 	// printf's to stdout this dictonary
 	virtual void dbgDump() const {}
 	};
-	
+
 struct transactionMode {
 	constexpr static uint8_t TM_UNKOWN = 0;
 	constexpr static uint8_t TM_LOAD = 1;
@@ -124,37 +134,6 @@ namespace sttSav
   {
     recordId id;
     uint32_t offset;
-  };
-}
-namespace sttSav
-{
-  class ArchiveManager
-  {
-  public:
-    ArchiveDictionaryI * mDictionary;
-    STTSAV_STRING mBasePath;
-    float compactionRatio;
-    uint32_t maxArchiveSize;
-    uint32_t minimumArchiveSize;
-  protected:
-    bool keepFilesOpen;
-  public:
-    ArchiveManager (ArchiveDictionaryI * _mDictionary);
-    ~ ArchiveManager ();
-    bool loadRecord (archiveKey const key, recordId const record, STTSAV_STRING & out);
-    bool saveRecord (archiveKey const key, recordId const record, char const * buff, uint32_t const len);
-    bool saveRecord (archiveKey const key, recordId const record, buffer const buff);
-    bool deleteRecord (archiveKey const key, recordId const record);
-    bool compactArchive (archiveKey const key, bool const forceCompact);
-    bool splitArchive (archiveKey const key, bool const forceSplit);
-    bool joinArchive (archiveKey const key, bool const forceJoin);
-    void startBulkTransations ();
-    void doTransactions (transaction * mTransactions, int const nTransactions);
-    void closeOpenFiles ();
-    void endBulkTransations ();
-    void extractRecordsList (archiveId const id, STTSAV_VECTOR <recordInfo> & out);
-    bool writeDictionary ();
-    bool readDictionary ();
   };
 }
 namespace sttSav
@@ -272,146 +251,286 @@ namespace sttSav
 
 // Implmentation file
 #define LZZ_INLINE inline
-namespace sttSav
-{
-  ArchiveManager::ArchiveManager (ArchiveDictionaryI * _mDictionary)
-                                                         {
-		mDictionary = _mDictionary;
-		compactionRatio = 1.5;
-		maxArchiveSize = 8388608; // 8MB
-		minimumArchiveSize = 1048576; // 1MB
-		keepFilesOpen = false;
-		}
-}
-namespace sttSav
-{
-  ArchiveManager::~ ArchiveManager ()
-                          {
-		closeOpenFiles();
-		}
-}
-namespace sttSav
-{
-  bool ArchiveManager::loadRecord (archiveKey const key, recordId const record, STTSAV_STRING & out)
-                                                                                         {
-		transaction t = transaction::makeLoad(key, record, out);
-		doTransactions(&t, 1);
-		return t.success;
-		}
-}
-namespace sttSav
-{
-  bool ArchiveManager::saveRecord (archiveKey const key, recordId const record, char const * buff, uint32_t const len)
-                                                                                                           {
-		return saveRecord(key, record, buffer(buff, len));
-		}
-}
-namespace sttSav
-{
-  bool ArchiveManager::saveRecord (archiveKey const key, recordId const record, buffer const buff)
-                                                                                        {
-		transaction t = transaction::makeSave(key, record, buff);
-		doTransactions(&t, 1);
-		return t.success;
-		}
-}
-namespace sttSav
-{
-  bool ArchiveManager::deleteRecord (archiveKey const key, recordId const record)
-                                                                       {
-		transaction t = transaction::makeDelete(key, record);
-		doTransactions(&t, 1);
-		return t.success;
-		}
-}
-namespace sttSav
-{
-  bool ArchiveManager::compactArchive (archiveKey const key, bool const forceCompact)
-                                                                           {
-		transaction t = transaction::makeCompact(key, forceCompact);
-		doTransactions(&t, 1);
-		return t.success;
-		}
-}
-namespace sttSav
-{
-  bool ArchiveManager::splitArchive (archiveKey const key, bool const forceSplit)
-                                                                       {
-		transaction t = transaction::makeCompact(key, forceSplit);
-		doTransactions(&t, 1);
-		return t.success;
-		}
-}
-namespace sttSav
-{
-  bool ArchiveManager::joinArchive (archiveKey const key, bool const forceJoin)
-                                                                     {
-		transaction t = transaction::makeCompact(key, forceJoin);
-		doTransactions(&t, 1);
-		return t.success;
-		}
-}
-namespace sttSav
-{
-  void ArchiveManager::startBulkTransations ()
-                                    {
-		keepFilesOpen = true;
-		}
-}
-namespace sttSav
-{
-  void ArchiveManager::doTransactions (transaction * mTransactions, int const nTransactions)
-                                                                                 {
-		// transactionMode = normal, flush. 
-		//  - normal: writes to disc, and does splitting and compacting where appropriate
-		//	- flush: writes to disc but doesn't do splitting, compacting. Use on app save & exit
-		
-		// Bulk load/save/delete to save file ops
-		// first resolve mKey -> archiveId
-		//...
-		// determine if we need to split files, etc
-		//...
-		// perform transactions in non-conflicting order
-		//...
-		
-		if (!keepFilesOpen)
-			closeOpenFiles();
-		}
-}
-namespace sttSav
-{
-  void ArchiveManager::closeOpenFiles ()
-                              {
-		//...
-		}
-}
-namespace sttSav
-{
-  void ArchiveManager::endBulkTransations ()
-                                  {
-		// close any open files here
-		closeOpenFiles();
-		keepFilesOpen = false;
-		}
-}
-namespace sttSav
-{
-  void ArchiveManager::extractRecordsList (archiveId const id, STTSAV_VECTOR <recordInfo> & out)
-                                                                                    {}
-}
-namespace sttSav
-{
-  bool ArchiveManager::writeDictionary ()
-                               { return false; }
-}
-namespace sttSav
-{
-  bool ArchiveManager::readDictionary ()
-                              { return false; }
-}
 #undef LZZ_INLINE
 #undef LZZ_OVERRIDE
 #endif //STT_SAV_IMPL_DOUBLE_GUARD_sttSav
+#endif //STT_SAV_IMPL_IMPL
+// This file is autogenerated. See look at the .lzz files in the src/ directory for a more human-friendly version
+#ifndef LZZ_OVERRIDE
+	#define LZZ_OVERRIDE override
+#endif
+// fileHandle.hh
+//
+
+#ifndef LZZ_fileHandle_hh
+#define LZZ_fileHandle_hh
+#include <stdio.h>
+#define LZZ_INLINE inline
+namespace sttSav
+{
+  struct FileOps
+  {
+    static bool move (char const * filenameOld, char const * filenameNew);
+    static bool remove (char const * filename);
+    static bool replace (char const * filenameOld, char const * filenameNew);
+  };
+}
+namespace sttSav
+{
+  class FileHandle
+  {
+  public:
+    enum openMode
+    {
+      OM_CLOSED = 0,
+      OM_READ,
+      OM_READ_WRITE
+    };
+  private:
+    FILE * mFile;
+    openMode mMode;
+  public:
+    FileHandle ();
+    ~ FileHandle ();
+    bool isOpen () const;
+    openMode getMode () const;
+    bool openRead (char const * filename);
+    bool openReadWrite (char const * filename, bool const createIfMissing = true);
+    void close ();
+    bool flush ();
+    bool seek (uint64_t const offset);
+    uint64_t tell () const;
+    uint64_t length ();
+    bool read (void * dst, uint32_t const len);
+    bool write (void const * src, uint32_t const len);
+    template <typename T>
+    bool read (T & value);
+    template <typename T>
+    bool write (T const & value);
+    bool truncate (uint64_t const newLength);
+  };
+}
+namespace sttSav
+{
+  template <typename T>
+  bool FileHandle::read (T & value)
+                            {
+		return read(&value, sizeof(T));
+		}
+}
+namespace sttSav
+{
+  template <typename T>
+  bool FileHandle::write (T const & value)
+                                   {
+		return write(&value, sizeof(T));
+		}
+}
+#undef LZZ_INLINE
+#endif
+#undef LZZ_OVERRIDE
+
+////////////////////////////////////////////////////////////////////////
+
+#ifdef STT_SAV_IMPL
+#ifndef STT_SAV_IMPL_DOUBLE_GUARD_fileHandle
+#define STT_SAV_IMPL_DOUBLE_GUARD_fileHandle
+#define LZZ_OVERRIDE
+// fileHandle.cpp
+//
+
+#include <cstdio>
+#include <cstdint>
+
+#ifdef _WIN32
+	#include <io.h>
+#else
+	#include <unistd.h>
+#endif
+#define LZZ_INLINE inline
+namespace sttSav
+{
+  bool FileOps::move (char const * filenameOld, char const * filenameNew)
+                                                                           {
+		return ::rename(filenameOld, filenameNew) == 0;
+		}
+}
+namespace sttSav
+{
+  bool FileOps::remove (char const * filename)
+                                                 {
+		return ::remove(filename) == 0;
+		}
+}
+namespace sttSav
+{
+  bool FileOps::replace (char const * filenameOld, char const * filenameNew)
+                                                                              {
+		#ifdef _WIN32
+			return MoveFileExA(filenameOld, filenameNew, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+		#else
+			return ::rename(filenameOld, filenameNew) == 0;
+		#endif
+		}
+}
+namespace sttSav
+{
+  FileHandle::FileHandle ()
+    : mFile (NULL), mMode (OM_CLOSED)
+                                                     {}
+}
+namespace sttSav
+{
+  FileHandle::~ FileHandle ()
+                      {
+		close();
+		}
+}
+namespace sttSav
+{
+  bool FileHandle::isOpen () const
+                            {
+		return mFile != NULL;
+		}
+}
+namespace sttSav
+{
+  FileHandle::openMode FileHandle::getMode () const
+                                 {
+		return mMode;
+		}
+}
+namespace sttSav
+{
+  bool FileHandle::openRead (char const * filename)
+                                            {
+		close();
+		mFile = fopen(filename, "rb");
+		if (!mFile)
+			return false;
+		mMode = OM_READ;
+		return true;
+		}
+}
+namespace sttSav
+{
+  bool FileHandle::openReadWrite (char const * filename, bool const createIfMissing)
+                                                                                    {
+		close();
+
+		// Try opening existing file first.
+		mFile = fopen(filename, "rb+");
+		if (!mFile && createIfMissing)
+			mFile = fopen(filename, "wb+");
+			
+		if (!mFile)
+			return false;
+		mMode = OM_READ_WRITE;
+		return true;
+		}
+}
+namespace sttSav
+{
+  void FileHandle::close ()
+                     {
+		if (mFile) {
+			fclose(mFile);
+			mFile = NULL;
+			}
+		mMode = OM_CLOSED;
+		}
+}
+namespace sttSav
+{
+  bool FileHandle::flush ()
+                     {
+		if (!mFile)
+			return false;
+		return fflush(mFile) == 0;
+		}
+}
+namespace sttSav
+{
+  bool FileHandle::seek (uint64_t const offset)
+                                         {
+		if (!mFile)
+			return false;
+#ifdef _WIN32
+		return _fseeki64(mFile, (__int64)offset, SEEK_SET) == 0;
+#else
+		return fseeko(mFile, (off_t)offset, SEEK_SET) == 0;
+#endif
+		}
+}
+namespace sttSav
+{
+  uint64_t FileHandle::tell () const
+                              {
+		if (!mFile)
+			return 0;
+#ifdef _WIN32
+		return (uint64_t)_ftelli64(mFile);
+#else
+		return (uint64_t)ftello(mFile);
+#endif
+		}
+}
+namespace sttSav
+{
+  uint64_t FileHandle::length ()
+                          {
+		if (!mFile)
+			return 0;
+
+		uint64_t oldPos = tell();
+#ifdef _WIN32
+		_fseeki64(mFile, 0, SEEK_END);
+		uint64_t len = (uint64_t)_ftelli64(mFile);
+		_fseeki64(mFile, (__int64)oldPos, SEEK_SET);
+#else
+		fseeko(mFile, 0, SEEK_END);
+		uint64_t len = (uint64_t)ftello(mFile);
+		fseeko(mFile, (off_t)oldPos, SEEK_SET);
+#endif
+		return len;
+		}
+}
+namespace sttSav
+{
+  bool FileHandle::read (void * dst, uint32_t const len)
+                                                 {
+		if (!mFile)
+			return false;
+		return fread(dst, 1, len, mFile) == len;
+		}
+}
+namespace sttSav
+{
+  bool FileHandle::write (void const * src, uint32_t const len)
+                                                        {
+		if (!mFile)
+			return false;
+		return fwrite(src, 1, len, mFile) == len;
+		}
+}
+namespace sttSav
+{
+  bool FileHandle::truncate (uint64_t const newLength)
+                                                {
+		if (!mFile)
+			return false;
+
+		flush();
+#ifdef _WIN32
+		return _chsize_s(_fileno(mFile), newLength) == 0;
+#else
+		return ftruncate(fileno(mFile), (off_t)newLength) == 0;
+#endif
+		}
+}
+#undef LZZ_INLINE
+#undef LZZ_OVERRIDE
+#endif //STT_SAV_IMPL_DOUBLE_GUARD_fileHandle
 #endif //STT_SAV_IMPL_IMPL
 // This file is autogenerated. See look at the .lzz files in the src/ directory for a more human-friendly version
 #ifndef LZZ_OVERRIDE
@@ -512,6 +631,7 @@ namespace sttSav
     void insertLookup (NODE * n);
     void clearLookup (archiveId const aid);
     static NODE * lookup (NODE * start, UNPACKED_KEY const & key);
+    void extractArchiveIdsWorker (uint32_t & workingCount, archiveId * archivesOut, uint32_t & numArchivesOut, uint32_t const maxArchivesOut) const;
   };
 }
 namespace sttSav
@@ -642,6 +762,22 @@ namespace sttSav
 				return current;
 			}
 		return NULL;
+		}
+}
+namespace sttSav
+{
+  template <typename NODE, typename UNPACKED_KEY>
+  void DictionaryLookup <NODE, UNPACKED_KEY>::extractArchiveIdsWorker (uint32_t & workingCount, archiveId * archivesOut, uint32_t & numArchivesOut, uint32_t const maxArchivesOut) const
+                                                                                                                                                    {
+		for (uint32_t i = 0; i < mLookup.size(); ++i) {
+			if (mLookup[i].aid.value) {
+				if (archivesOut && numArchivesOut < maxArchivesOut) {
+					archivesOut[numArchivesOut] = mLookup[i].aid;
+					numArchivesOut++;
+					}
+				workingCount++;
+				}
+			}
 		}
 }
 namespace sttSav
@@ -1035,7 +1171,7 @@ namespace sttSav
       uint32_t memberCount;
       bool isObject;
     };
-    STT_SAV_VECTOR <scope> stack;
+    STTSAV_VECTOR <scope> stack;
   public:
     BinaryWriter ();
     BinaryWriter (StringEncoder * _enc);
@@ -1859,4 +1995,264 @@ namespace sttSav
 #undef LZZ_INLINE
 #undef LZZ_OVERRIDE
 #endif //STT_SAV_IMPL_DOUBLE_GUARD_binaryValueWriter
+#endif //STT_SAV_IMPL_IMPL
+// This file is autogenerated. See look at the .lzz files in the src/ directory for a more human-friendly version
+#ifndef LZZ_OVERRIDE
+	#define LZZ_OVERRIDE override
+#endif
+// archiveFile.hh
+//
+
+#ifndef LZZ_archiveFile_hh
+#define LZZ_archiveFile_hh
+namespace sttSav {
+struct archiveConstants {
+	static constexpr uint32_t ARCHIVE_MAGIC = uint32_t('S') | (uint32_t('T') << 8) | (uint32_t('S') << 16) | (uint32_t('V') << 24);
+	static constexpr uint16_t ARCHIVE_VERSION = 1;
+	};
+}
+#define LZZ_INLINE inline
+namespace sttSav
+{
+  struct ArchiveFileHeader
+  {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t reserved;
+    uint64_t directoryOffset;
+  };
+}
+namespace sttSav
+{
+  class ArchiveFile
+  {
+  public:
+    STTSAV_VECTOR <recordInfo> records;
+    archiveId aid;
+    uint64_t fileLength;
+    uint64_t wastedBytes;
+    FileHandle file;
+    bool hasLoadedRecords;
+    ArchiveFile ();
+  };
+}
+namespace sttSav
+{
+  LZZ_INLINE ArchiveFile::ArchiveFile ()
+    : aid ({0}), fileLength (0), hasLoadedRecords (false)
+                                                                            {}
+}
+#undef LZZ_INLINE
+#endif
+#undef LZZ_OVERRIDE
+
+////////////////////////////////////////////////////////////////////////
+
+#ifdef STT_SAV_IMPL
+#ifndef STT_SAV_IMPL_DOUBLE_GUARD_archiveFile
+#define STT_SAV_IMPL_DOUBLE_GUARD_archiveFile
+#define LZZ_OVERRIDE
+// archiveFile.cpp
+//
+
+#define LZZ_INLINE inline
+#undef LZZ_INLINE
+#undef LZZ_OVERRIDE
+#endif //STT_SAV_IMPL_DOUBLE_GUARD_archiveFile
+#endif //STT_SAV_IMPL_IMPL
+// This file is autogenerated. See look at the .lzz files in the src/ directory for a more human-friendly version
+#ifndef LZZ_OVERRIDE
+	#define LZZ_OVERRIDE override
+#endif
+// archiveManager.hh
+//
+
+#ifndef LZZ_archiveManager_hh
+#define LZZ_archiveManager_hh
+#define LZZ_INLINE inline
+namespace sttSav
+{
+  class ArchiveManager
+  {
+  public:
+    ArchiveDictionaryI * mDictionary;
+    STTSAV_STRING mBasePath;
+    float compactionRatio;
+    uint32_t maxArchiveSize;
+    uint32_t minimumArchiveSize;
+  protected:
+    bool keepFilesOpen;
+  public:
+    ArchiveManager (ArchiveDictionaryI * _mDictionary);
+    ~ ArchiveManager ();
+    bool loadRecord (archiveKey const key, recordId const record, STTSAV_STRING & out);
+    bool saveRecord (archiveKey const key, recordId const record, char const * buff, uint32_t const len);
+    bool saveRecord (archiveKey const key, recordId const record, buffer const buff);
+    bool deleteRecord (archiveKey const key, recordId const record);
+    bool compactArchive (archiveKey const key, bool const forceCompact);
+    bool splitArchive (archiveKey const key, bool const forceSplit);
+    bool joinArchive (archiveKey const key, bool const forceJoin);
+    void startBulkTransations ();
+    void doTransactions (transaction * mTransactions, int const nTransactions);
+    void closeOpenFiles ();
+    void endBulkTransations ();
+    void extractRecordsList (archiveId const id, STTSAV_VECTOR <recordInfo> & out);
+    bool writeDictionary ();
+    bool readDictionary ();
+  };
+}
+#undef LZZ_INLINE
+#endif
+#undef LZZ_OVERRIDE
+
+////////////////////////////////////////////////////////////////////////
+
+#ifdef STT_SAV_IMPL
+#ifndef STT_SAV_IMPL_DOUBLE_GUARD_archiveManager
+#define STT_SAV_IMPL_DOUBLE_GUARD_archiveManager
+#define LZZ_OVERRIDE
+// archiveManager.cpp
+//
+
+#define LZZ_INLINE inline
+namespace sttSav
+{
+  ArchiveManager::ArchiveManager (ArchiveDictionaryI * _mDictionary)
+                                                         {
+		mDictionary = _mDictionary;
+		compactionRatio = 1.5;
+		maxArchiveSize = 8388608; // 8MB
+		minimumArchiveSize = 1048576; // 1MB
+		keepFilesOpen = false;
+		}
+}
+namespace sttSav
+{
+  ArchiveManager::~ ArchiveManager ()
+                          {
+		closeOpenFiles();
+		}
+}
+namespace sttSav
+{
+  bool ArchiveManager::loadRecord (archiveKey const key, recordId const record, STTSAV_STRING & out)
+                                                                                         {
+		transaction t = transaction::makeLoad(key, record, out);
+		doTransactions(&t, 1);
+		return t.success;
+		}
+}
+namespace sttSav
+{
+  bool ArchiveManager::saveRecord (archiveKey const key, recordId const record, char const * buff, uint32_t const len)
+                                                                                                           {
+		return saveRecord(key, record, buffer(buff, len));
+		}
+}
+namespace sttSav
+{
+  bool ArchiveManager::saveRecord (archiveKey const key, recordId const record, buffer const buff)
+                                                                                        {
+		transaction t = transaction::makeSave(key, record, buff);
+		doTransactions(&t, 1);
+		return t.success;
+		}
+}
+namespace sttSav
+{
+  bool ArchiveManager::deleteRecord (archiveKey const key, recordId const record)
+                                                                       {
+		transaction t = transaction::makeDelete(key, record);
+		doTransactions(&t, 1);
+		return t.success;
+		}
+}
+namespace sttSav
+{
+  bool ArchiveManager::compactArchive (archiveKey const key, bool const forceCompact)
+                                                                           {
+		transaction t = transaction::makeCompact(key, forceCompact);
+		doTransactions(&t, 1);
+		return t.success;
+		}
+}
+namespace sttSav
+{
+  bool ArchiveManager::splitArchive (archiveKey const key, bool const forceSplit)
+                                                                       {
+		transaction t = transaction::makeCompact(key, forceSplit);
+		doTransactions(&t, 1);
+		return t.success;
+		}
+}
+namespace sttSav
+{
+  bool ArchiveManager::joinArchive (archiveKey const key, bool const forceJoin)
+                                                                     {
+		transaction t = transaction::makeCompact(key, forceJoin);
+		doTransactions(&t, 1);
+		return t.success;
+		}
+}
+namespace sttSav
+{
+  void ArchiveManager::startBulkTransations ()
+                                    {
+		keepFilesOpen = true;
+		}
+}
+namespace sttSav
+{
+  void ArchiveManager::doTransactions (transaction * mTransactions, int const nTransactions)
+                                                                                 {
+		// transactionMode = normal, flush. 
+		//  - normal: writes to disc, and does splitting and compacting where appropriate
+		//	- flush: writes to disc but doesn't do splitting, compacting. Use on app save & exit
+		
+		// Bulk load/save/delete to save file ops
+		// first resolve mKey -> archiveId
+		//...
+		// determine if we need to split files, etc
+		//...
+		// perform transactions in non-conflicting order
+		//...
+		
+		if (!keepFilesOpen)
+			closeOpenFiles();
+		}
+}
+namespace sttSav
+{
+  void ArchiveManager::closeOpenFiles ()
+                              {
+		//...
+		}
+}
+namespace sttSav
+{
+  void ArchiveManager::endBulkTransations ()
+                                  {
+		// close any open files here
+		closeOpenFiles();
+		keepFilesOpen = false;
+		}
+}
+namespace sttSav
+{
+  void ArchiveManager::extractRecordsList (archiveId const id, STTSAV_VECTOR <recordInfo> & out)
+                                                                                    {}
+}
+namespace sttSav
+{
+  bool ArchiveManager::writeDictionary ()
+                               { return false; }
+}
+namespace sttSav
+{
+  bool ArchiveManager::readDictionary ()
+                              { return false; }
+}
+#undef LZZ_INLINE
+#undef LZZ_OVERRIDE
+#endif //STT_SAV_IMPL_DOUBLE_GUARD_archiveManager
 #endif //STT_SAV_IMPL_IMPL

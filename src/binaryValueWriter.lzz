@@ -493,7 +493,7 @@ protected:
 		uint32_t memberCount;
 		bool isObject;
 		};
-	STT_SAV_VECTOR<scope> stack;
+	STTSAV_VECTOR<scope> stack;
 
 public:
 	inline BinaryWriter() : enc(NULL) {}

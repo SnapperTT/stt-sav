@@ -6,9 +6,10 @@ Used in the upcoming title [Turf2](https://turf2.net).
 sttSav works with Dictionaries, Archives, Keys and Records.
 
 * Archives are the files where data is saved. These are your region files. Empty regions produce no files. Archives are split into multiple files when they grow too large.
-* Records are the blobs of data
+* Records are the blobs of data. Every record has a `uint32_t` identifier that you use as lookup
 * Keys describe where Records are physically in your game world. 
 * Dictionaries map Keys to Archives
+* class `ArchiveManager` provides you your interface to use sttSav. Dictionaries, archive files, etc are all handled "under the hood". You just pass `(Key, Record, Blobs)` to ArchiveManager to save, and request `(Key, Record)` from it to load.
 
 ```
 ( Keys, Records ) ==> ( Dictionaries ) ==> Archives
@@ -49,12 +50,50 @@ ROOT
 
 sttSave will only produce archive files for non-empty leaf nodes.
 
+Archive files are written in append only to help ensure data integrity in case of crashing or power outages. Archives can be compacted which cleans out dead records.
+
 sttSav also provides json style binary serialisation 
 
 * `StringEncoder`/`StringDecoder` serialises binary values and strings to or fram a string
 * `BinaryWriter`/`BinaryValue` serialises binary data in a key => value JSON style format. The api has been made to be parallel to [rapidJson](https://rapidjson.org/), so you can easily write wrappers that encode JSON or sttSaveBinary records.
 
-## Building:
+You don't need to use these helpers, ArchiveManager will accept any blob.
+
+# Using:
+ArchiveManager is the fundamental class for stt-sav. You instantate it, assign a dictionary, set you path, and then you start adding data.
+
+```
+XYArchiveDictionary Dict;
+ArchiveManager M(&Dict);
+
+M.saveRecord(Dict::getKey(x, y), {1337}, dataOut);
+M.loadRecord(Dict::getKey(x, y), {42069}, dataIn);
+```
+
+ArchiveManager also supports bulk operations to minimize disc i/o:
+
+```
+std::string stringOut;
+sttSav::transaction t[3];
+t[0] = sttSav::transaction::makeLoad(key, record, stringOut);
+t[1] = sttSav::transaction::makeSave(key2, record2, dataIn.data(), dataIn.size());
+t[2] = sttSav::transaction::deleteRecord(key3, record3);
+
+M.doTransactions(&t, 3);
+```
+
+You can even batch bulk operations:
+```
+sttSave::transaction t[32];
+uint32_t nTransations;
+M.startBulkTransations();
+while (nTransations = queue.read(t, nTransations, 32)) {
+	M.doTransactions(&t, nTransactions);
+	}
+M.endBulkTransations(); // closes any open files
+```
+
+# Building:
 This is a single header library. `#include "stt-sav.hh"`, and `#define STT_SAV_IMPL 1` in ONE compilation unit.
 
 To modify source you need [lzz](https://github.com/SnapperTT/lzz-bin).
@@ -71,7 +110,7 @@ Different applications may implement different dictionary strategies (planetary 
 This is the base class for all Dictionaryies
 
 ## XYArchiveDictionary
-`#include planetaryFaceUVArchiveDictionary.h`
+`#include XYArchiveDictionary.h`
 
 `XYArchiveDictionary` is an archive dictionary for large 2D worlds such as voxel, tile-based and open-world games. Objects are indexed using a pair of signed 16-bit coordinates `(x, y)` packed into a 32-bit key.
 
@@ -80,7 +119,7 @@ The world is partitioned using a quadtree. Each archive represents a square regi
 Example filename `region-sz8192-x4096-y16384.sav`.
 
 ## PlanetaryFaceUVArchiveDictionary
-`#include XYArchiveDictionary.h`
+`#include planetaryFaceUVArchiveDictionary.h`
 
 `PlanetaryFaceUVArchiveDictionary` is an archive dictionary for procedurally generated planetary worlds. Objects are indexed using `(planet, face, flags, localU, localV)`, where each planet consists of six cube faces plus a global face for planet-wide data that doesn't belong to any particualar face.
 

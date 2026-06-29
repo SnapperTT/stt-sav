@@ -101,6 +101,18 @@ public:
 			}
 		return NULL;
 		}
+		
+	void extractArchiveIdsWorker(uint32_t& workingCount, archiveId* archivesOut, uint32_t& numArchivesOut, const uint32_t maxArchivesOut) const {
+		for (uint32_t i = 0; i < mLookup.size(); ++i) {
+			if (mLookup[i].aid.value) {
+				if (archivesOut && numArchivesOut < maxArchivesOut) {
+					archivesOut[numArchivesOut] = mLookup[i].aid;
+					numArchivesOut++;
+					}
+				workingCount++;
+				}
+			}
+		}
 	};
 	
 template<typename NODE, typename UNPACKED_KEY>

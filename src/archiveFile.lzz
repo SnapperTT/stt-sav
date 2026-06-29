@@ -1,0 +1,40 @@
+#hdr
+namespace sttSav {
+struct archiveConstants {
+	static constexpr uint32_t ARCHIVE_MAGIC = uint32_t('S') | (uint32_t('T') << 8) | (uint32_t('S') << 16) | (uint32_t('V') << 24);
+	static constexpr uint16_t ARCHIVE_VERSION = 1;
+	};
+}
+#end
+
+#src
+#end
+
+namespace sttSav {
+
+struct ArchiveFileHeader {
+	uint32_t magic;          // "STSV"
+	uint16_t version;
+	uint16_t reserved;
+	uint64_t directoryOffset;
+	};
+
+class ArchiveFile {
+public:
+    STTSAV_VECTOR<recordInfo> records;
+	archiveId aid;
+	uint64_t fileLength;
+	uint64_t wastedBytes;
+	FileHandle file;
+    bool hasLoadedRecords;
+    
+    inline ArchiveFile() : aid({0}), fileLength(0), hasLoadedRecords(false) {}
+
+    //bool load(const char* filename);
+    //bool save(const char* filename);
+    //bool loadRecord(...);
+    //bool saveRecord(...);
+    //bool deleteRecord(...);
+	};
+
+} // namespace sttSav

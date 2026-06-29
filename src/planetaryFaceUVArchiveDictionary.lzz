@@ -119,8 +119,13 @@ public:
 			}
 		
 		~node () {
+			destroyChildren();
+			}
+		
+		void destroyChildren() {
 			for (node* n : children)
 				STTSAV_DEL(n, sizeof(node));
+			children.clear();
 			}
 		
 		void encode(BinaryWriter& w) const {
@@ -247,6 +252,29 @@ public:
 		
 	archiveId getArchiveId(const archiveKey key) const {
 		return mLookup.getArchiveId(key, const_cast<node*>(&root));
+		}
+		
+	uint32_t extractArchiveIds(archiveId* archivesOut, uint32_t& numArchivesOut, const uint32_t maxArchivesOut) const {
+		uint32_t workingCount = 0;
+		mLookup.extractArchiveIdsWorker(workingCount, archivesOut, numArchivesOut, maxArchivesOut);
+		return workingCount;
+		}
+		
+	STTSAV_STRING encodeDictionary() const {
+		STTSAV_STRING r;
+		StringEncoder enc(r);
+		BinaryWriter w(&enc);
+		root.encode(w);
+		return r;
+		}
+	
+	uint32_t decodeDictionary(const STTSAV_STRING& data) {
+		StringDecoder d(data);
+		BinaryValue v(&d);
+		root.destroyChildren();
+		root.decode(v);
+		uint32_t unused = 0;
+		return extractArchiveIds(NULL, unused, 0);
 		}
 			
 	void getArchiveFilename(const archiveId id, char* nameOut, uint32_t& lenOut, const uint32_t maxLen) const {

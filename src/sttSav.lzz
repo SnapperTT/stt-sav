@@ -22,6 +22,7 @@ struct splitResult {
     uint32_t size;
 	};
 
+
 class ArchiveDictionaryI {
 public:
 	/// Archive dictionary interface
@@ -63,10 +64,19 @@ public:
 	// Commits the merge in the dictionary, from the list provided by getMergeCandidates
 	virtual bool mergeArchives(const archiveId* archives, const uint32_t numArchives) = 0;
 	
+	// Returns the total number of archives in the dictionary. Set "archivesOut" to NULL to just query. numArchivesOut is the number of archives written to the archivesOut array
+	virtual uint32_t extractArchiveIds(archiveId* archivesOut, uint32_t& numArchivesOut, const uint32_t maxArchivesOut) const = 0;
+	
+	// Serialises this dictionary for disc storage
+	virtual STTSAV_STRING encodeDictionary() const = 0;
+	
+	// Decodes and initialises this dictionary. Returns the number of archives in the directory 
+	virtual uint32_t decodeDictionary(const STTSAV_STRING& data) = 0;
+	
 	// printf's to stdout this dictonary
 	virtual void dbgDump() const {}
 	};
-	
+
 struct transactionMode {
 	constexpr static uint8_t TM_UNKOWN = 0;
 	constexpr static uint8_t TM_LOAD = 1;
@@ -178,104 +188,6 @@ struct transaction {
 struct recordHeaderShort {
 	recordId id;		// id == 0 -> empty block
 	uint32_t offset;
-	};
-	
-// //////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-class ArchiveManager {
-public:
-	ArchiveDictionaryI* mDictionary;
-	STTSAV_STRING mBasePath;
-	float compactionRatio; // (unused space)/(used space) > this? Compact!
-	uint32_t maxArchiveSize; // bigger than this? split!
-	uint32_t minimumArchiveSize; // all archives smaller than this?
-protected:
-	bool keepFilesOpen;
-
-public:
-	ArchiveManager(ArchiveDictionaryI* _mDictionary) {
-		mDictionary = _mDictionary;
-		compactionRatio = 1.5;
-		maxArchiveSize = 8388608; // 8MB
-		minimumArchiveSize = 1048576; // 1MB
-		keepFilesOpen = false;
-		}
-	~ArchiveManager() {
-		closeOpenFiles();
-		}
-
-	// Api for single transactions
-	bool loadRecord(const archiveKey key, const recordId record, STTSAV_STRING& out) {
-		transaction t = transaction::makeLoad(key, record, out);
-		doTransactions(&t, 1);
-		return t.success;
-		}
-	bool saveRecord(const archiveKey key, const recordId record, const char* buff, const uint32_t len) {
-		return saveRecord(key, record, buffer(buff, len));
-		}
-	bool saveRecord(const archiveKey key, const recordId record, const buffer buff) {
-		transaction t = transaction::makeSave(key, record, buff);
-		doTransactions(&t, 1);
-		return t.success;
-		}
-	bool deleteRecord(const archiveKey key, const recordId record) {
-		transaction t = transaction::makeDelete(key, record);
-		doTransactions(&t, 1);
-		return t.success;
-		}
-	bool compactArchive(const archiveKey key, const bool forceCompact) {
-		transaction t = transaction::makeCompact(key, forceCompact);
-		doTransactions(&t, 1);
-		return t.success;
-		}
-	bool splitArchive(const archiveKey key, const bool forceSplit) {
-		transaction t = transaction::makeCompact(key, forceSplit);
-		doTransactions(&t, 1);
-		return t.success;
-		}
-	bool joinArchive(const archiveKey key, const bool forceJoin) {
-		transaction t = transaction::makeCompact(key, forceJoin);
-		doTransactions(&t, 1);
-		return t.success;
-		}
-	
-	void startBulkTransations() {
-		keepFilesOpen = true;
-		}
-	
-	void doTransactions(transaction* mTransactions, const int nTransactions) {
-		// transactionMode = normal, flush. 
-		//  - normal: writes to disc, and does splitting and compacting where appropriate
-		//	- flush: writes to disc but doesn't do splitting, compacting. Use on app save & exit
-		
-		// Bulk load/save/delete to save file ops
-		// first resolve mKey -> archiveId
-		//...
-		// determine if we need to split files, etc
-		//...
-		// perform transactions in non-conflicting order
-		//...
-		
-		if (!keepFilesOpen)
-			closeOpenFiles();
-		}
-	
-	void closeOpenFiles() {
-		//...
-		}
-	
-	void endBulkTransations() {
-		// close any open files here
-		closeOpenFiles();
-		keepFilesOpen = false;
-		} 
-	
-	// For an archive file, we extract a list of records
-	void extractRecordsList(const archiveId id, STTSAV_VECTOR<recordInfo>& out) {}
-
-	// Writes the dictionary to file
-	bool writeDictionary() { return false; }
-	bool readDictionary() { return false; }
 	};
 
 } // namespace sttSav

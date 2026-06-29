@@ -1,0 +1,173 @@
+#hdr
+#include <stdio.h>
+#end
+
+
+#src
+#include <cstdio>
+#include <cstdint>
+
+#ifdef _WIN32
+	#include <io.h>
+#else
+	#include <unistd.h>
+#endif
+#end
+
+namespace sttSav {
+	
+struct FileOps {
+	static bool move(const char* filenameOld, const char* filenameNew) {
+		return ::rename(filenameOld, filenameNew) == 0;
+		}
+
+	static bool remove(const char* filename) {
+		return ::remove(filename) == 0;
+		}
+
+	static bool replace(const char* filenameOld, const char* filenameNew) {
+		#ifdef _WIN32
+			return MoveFileExA(filenameOld, filenameNew, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+		#else
+			return ::rename(filenameOld, filenameNew) == 0;
+		#endif
+		}
+	};
+
+class FileHandle {
+public:
+	enum openMode {
+		OM_CLOSED = 0,
+		OM_READ,
+		OM_READ_WRITE
+		};
+
+private:
+	FILE* mFile;
+	openMode mMode;
+
+public:
+	FileHandle() : mFile(NULL), mMode(OM_CLOSED) {}
+
+	~FileHandle() {
+		close();
+		}
+
+	bool isOpen() const {
+		return mFile != NULL;
+		}
+
+	openMode getMode() const {
+		return mMode;
+		}
+
+	bool openRead(const char* filename) {
+		close();
+		mFile = fopen(filename, "rb");
+		if (!mFile)
+			return false;
+		mMode = OM_READ;
+		return true;
+		}
+
+	bool openReadWrite(const char* filename, const bool createIfMissing = true) {
+		close();
+
+		// Try opening existing file first.
+		mFile = fopen(filename, "rb+");
+		if (!mFile && createIfMissing)
+			mFile = fopen(filename, "wb+");
+			
+		if (!mFile)
+			return false;
+		mMode = OM_READ_WRITE;
+		return true;
+		}
+
+	void close() {
+		if (mFile) {
+			fclose(mFile);
+			mFile = NULL;
+			}
+		mMode = OM_CLOSED;
+		}
+
+	bool flush() {
+		if (!mFile)
+			return false;
+		return fflush(mFile) == 0;
+		}
+
+	bool seek(const uint64_t offset) {
+		if (!mFile)
+			return false;
+#ifdef _WIN32
+		return _fseeki64(mFile, (__int64)offset, SEEK_SET) == 0;
+#else
+		return fseeko(mFile, (off_t)offset, SEEK_SET) == 0;
+#endif
+		}
+
+	uint64_t tell() const {
+		if (!mFile)
+			return 0;
+#ifdef _WIN32
+		return (uint64_t)_ftelli64(mFile);
+#else
+		return (uint64_t)ftello(mFile);
+#endif
+		}
+
+	uint64_t length() {
+		if (!mFile)
+			return 0;
+
+		uint64_t oldPos = tell();
+#ifdef _WIN32
+		_fseeki64(mFile, 0, SEEK_END);
+		uint64_t len = (uint64_t)_ftelli64(mFile);
+		_fseeki64(mFile, (__int64)oldPos, SEEK_SET);
+#else
+		fseeko(mFile, 0, SEEK_END);
+		uint64_t len = (uint64_t)ftello(mFile);
+		fseeko(mFile, (off_t)oldPos, SEEK_SET);
+#endif
+		return len;
+		}
+
+	bool read(void* dst, const uint32_t len) {
+		if (!mFile)
+			return false;
+		return fread(dst, 1, len, mFile) == len;
+		}
+
+	bool write(const void* src, const uint32_t len) {
+		if (!mFile)
+			return false;
+		return fwrite(src, 1, len, mFile) == len;
+		}
+
+	template<typename T>
+	bool read(T& value) {
+		return read(&value, sizeof(T));
+		}
+
+	template<typename T>
+	bool write(const T& value) {
+		return write(&value, sizeof(T));
+		}
+
+	bool truncate(const uint64_t newLength) {
+		if (!mFile)
+			return false;
+
+		flush();
+#ifdef _WIN32
+		return _chsize_s(_fileno(mFile), newLength) == 0;
+#else
+		return ftruncate(fileno(mFile), (off_t)newLength) == 0;
+#endif
+		}
+	};
+	
+} // namespace sttSav

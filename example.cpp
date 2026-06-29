@@ -29,8 +29,8 @@ int main (int argc, char * * argv);
 #include <cstring>
 using std::printf;
 
-#define STT_SAV_STRING std::string
-#define STT_SAV_VECTOR std::vector
+#define STTSAV_STRING std::string
+#define STTSAV_VECTOR std::vector
 #include <string>
 #include <vector>
 #define STTSAV_ASSERT assert
@@ -50,7 +50,7 @@ using std::printf;
 
 // Helper functions
 namespace sttSav {
-void testSplitting(ArchiveDictionaryI& dic, const archiveId aid, STT_SAV_VECTOR<recordInfo>& records) {
+void testSplitting(ArchiveDictionaryI& dic, const archiveId aid, STTSAV_VECTOR<recordInfo>& records) {
 	// Tests splitting a dictionary based on oversized records
 	struct workItem {
 		archiveId aid;

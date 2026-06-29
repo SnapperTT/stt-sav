@@ -95,6 +95,7 @@ namespace sttSav
       STTSAV_VECTOR_PLANETNODE <node*> children;
       node ();
       ~ node ();
+      void destroyChildren ();
       void encode (BinaryWriter & w) const;
       void decode (BinaryValue const & val);
       bool canSplit () const;
@@ -110,6 +111,9 @@ namespace sttSav
     void initNewDictionary ();
     archiveKey buildKey (uint16_t const planet, uint8_t const face, uint8_t const flags, uint8_t const localU, uint8_t const localV) const;
     archiveId getArchiveId (archiveKey const key) const;
+    uint32_t extractArchiveIds (archiveId * archivesOut, uint32_t & numArchivesOut, uint32_t const maxArchivesOut) const;
+    STTSAV_STRING encodeDictionary () const;
+    uint32_t decodeDictionary (STTSAV_STRING const & data);
     void getArchiveFilename (archiveId const id, char * nameOut, uint32_t & lenOut, uint32_t const maxLen) const;
     bool splitArchive (archiveId const id, STTSAV_VECTOR <recordInfo> const & records, uint32_t const maxArchiveSize, splitResult * resultsOut, uint32_t & numResultsOut, uint32_t const maxResultsOut);
     bool getMergeCandidates (archiveId const id, archiveId * archivesOut, uint32_t & numArchivesOut, uint32_t const maxArchivesOut) const;
@@ -194,8 +198,16 @@ namespace sttSav
 {
   PlanetaryFaceUVArchiveDictionary::node::~ node ()
                          {
+			destroyChildren();
+			}
+}
+namespace sttSav
+{
+  void PlanetaryFaceUVArchiveDictionary::node::destroyChildren ()
+                                       {
 			for (node* n : children)
 				STTSAV_DEL(n, sizeof(node));
+			children.clear();
 			}
 }
 namespace sttSav
@@ -342,6 +354,38 @@ namespace sttSav
   archiveId PlanetaryFaceUVArchiveDictionary::getArchiveId (archiveKey const key) const
                                                            {
 		return mLookup.getArchiveId(key, const_cast<node*>(&root));
+		}
+}
+namespace sttSav
+{
+  uint32_t PlanetaryFaceUVArchiveDictionary::extractArchiveIds (archiveId * archivesOut, uint32_t & numArchivesOut, uint32_t const maxArchivesOut) const
+                                                                                                                          {
+		uint32_t workingCount = 0;
+		mLookup.extractArchiveIdsWorker(workingCount, archivesOut, numArchivesOut, maxArchivesOut);
+		return workingCount;
+		}
+}
+namespace sttSav
+{
+  STTSAV_STRING PlanetaryFaceUVArchiveDictionary::encodeDictionary () const
+                                               {
+		STTSAV_STRING r;
+		StringEncoder enc(r);
+		BinaryWriter w(&enc);
+		root.encode(w);
+		return r;
+		}
+}
+namespace sttSav
+{
+  uint32_t PlanetaryFaceUVArchiveDictionary::decodeDictionary (STTSAV_STRING const & data)
+                                                             {
+		StringDecoder d(data);
+		BinaryValue v(&d);
+		root.destroyChildren();
+		root.decode(v);
+		uint32_t unused = 0;
+		return extractArchiveIds(NULL, unused, 0);
 		}
 }
 namespace sttSav
