@@ -67,7 +67,8 @@ $(TEMPDIR)%.cpp $(TEMPDIR)%.hh: %.lzz $(SUBSOURCES)
 	$(LAZY) $(STTR_FLAG) -o $(TEMPDIR)$(dir $<) $<
 
 $(OSINGLEHEADER_OUT): $(addprefix $(TEMPDIR), $(SINGLEHEADER_SRC)) $(OUTPUTDIR)
-	cat $(addprefix $(TEMPDIR), $(SINGLEHEADER_SRC)) > $(OSINGLEHEADER_OUT)
+	echo -e "#ifdef STT_SAV_IMPL\n#undef STT_SAV_IMPL\n#define STT_SAV_CURRENT_FILE __FILE__\n#include STT_SAV_CURRENT_FILE\n#define STT_SAV_IMPL\n#endif" \
+    | cat - $(addprefix $(TEMPDIR), $(SINGLEHEADER_SRC)) > $(OSINGLEHEADER_OUT)
 	
 $(OPAGES_OUT): $(addprefix $(TEMPDIR), $(PAGES_SRC)) $(OUTPUTDIR)
 	cat $(addprefix $(TEMPDIR), $(PAGES_SRC)) > $(OPAGES_OUT)

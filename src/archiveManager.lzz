@@ -12,6 +12,8 @@ protected:
 	bool keepFilesOpen;
 
 public:
+	STTSAV_VECTOR<ArchiveFile*> mArchives;
+
 	ArchiveManager(ArchiveDictionaryI* _mDictionary) {
 		mDictionary = _mDictionary;
 		compactionRatio = 1.5;

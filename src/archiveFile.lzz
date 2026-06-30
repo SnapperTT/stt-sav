@@ -4,6 +4,7 @@ struct archiveConstants {
 	static constexpr uint32_t ARCHIVE_MAGIC = uint32_t('S') | (uint32_t('T') << 8) | (uint32_t('S') << 16) | (uint32_t('V') << 24);
 	static constexpr uint16_t ARCHIVE_VERSION = 1;
 	};
+class ArchiveManager;
 }
 #end
 
@@ -17,24 +18,512 @@ struct ArchiveFileHeader {
 	uint16_t version;
 	uint16_t reserved;
 	uint64_t directoryOffset;
+	
+	inline static uint64_t getDirectoryOffsetAddr(const uint64_t thisOffset) {
+		return thisOffset + sizeof(magic) + sizeof(version) + sizeof(reserved);
+		}
+	};
+
+struct ArchiveDirectoryHeader {
+    uint32_t numRecords;
+    uint32_t reserved;
+    uint64_t nextDirectoryOffset;
+    
+	inline static uint64_t getDirectoryOffsetAddr(const uint64_t thisOffset) {
+		return thisOffset + sizeof(numRecords) + sizeof(reserved);
+		}
 	};
 
 class ArchiveFile {
 public:
     STTSAV_VECTOR<recordInfo> records;
+    STTSAV_STRING filename;
+    ArchiveFileHeader mHeader;
 	archiveId aid;
 	uint64_t fileLength;
 	uint64_t wastedBytes;
+	uint64_t lastDirectoryOffsetAddr;
 	FileHandle file;
     bool hasLoadedRecords;
+    bool fileExists;
     
-    inline ArchiveFile() : aid({0}), fileLength(0), hasLoadedRecords(false) {}
+     // in-flight write data
+    STTSAV_VECTOR<recordInfo> pendingRecords;
+	STTSAV_STRING writeBuffer;
+    
+    inline ArchiveFile() : aid({0}), fileLength(0), wastedBytes(0), lastDirectoryOffsetAddr(0), hasLoadedRecords(false), fileExists(false) {
+		initHeader();
+		}
+		
+	void initHeader() {
+		mHeader.magic = archiveConstants::ARCHIVE_MAGIC;
+		mHeader.version = archiveConstants::ARCHIVE_VERSION;
+		mHeader.reserved = 0;
+		mHeader.directoryOffset = 0; // 0 => nullptr
+		}
+		
+	void setFilename(const ArchiveManager& AM) {
+		char buff[1024];
+		uint32_t len = 0;
+		AM.mDictionary->getArchiveFilename(aid, buff, len, 1024);
+		filename = AM.mBasePath + buff;
+		}
 
-    //bool load(const char* filename);
-    //bool save(const char* filename);
-    //bool loadRecord(...);
-    //bool saveRecord(...);
-    //bool deleteRecord(...);
+protected:
+	// helpers
+	// Record lookup
+	uint32_t findRecord(const recordId id) const {
+		// If this fails to compile be sure to #include <algorithm>
+		auto it = std::lower_bound(records.begin(), records.end(), id, recordInfo::compareRecords());
+		if (it == records.end() || it->record.value != id.value)
+			return -1;
+		return (it - records.begin());
+		}
+
+	uint32_t findPendingRecord(const recordId id, const bool isForward = true) const {
+		if (isForward) {
+			for (uint32_t i = 0; i < pendingRecords.size(); ++i) {
+				if (pendingRecords[i].record.value == id.value)
+					return i;
+				}
+			}
+		else {
+			for (uint32_t i = pendingRecords.size()-1; i < pendingRecords.size(); --i) {
+				if (pendingRecords[i].record.value == id.value)
+					return i;
+				}
+			}
+		return -1;
+		}
+
+	void appendPendingBlob(recordInfo& r, const buffer buff) {
+		r.offset = writeBuffer.size();
+		r.length = buff.len;
+		writeBuffer.append((const char*) buff.data, buff.len);
+		}
+
+public:
+	bool loadRecord(const recordId id, STTSAV_STRING& recordOut) {
+		STTSAV_ASSERT(hasLoadedRecords);
+		recordOut.clear();
+
+		// Check pending changes first (newest first).
+		uint32_t p = findPendingRecord(id, false);
+		if (p < pendingRecords.size()) {
+			const recordInfo& r = pendingRecords[p];
+			// Tombstone? => Record no longer exists
+			if (r.length == 0)
+				return true;
+			STTSAV_ASSERT(r.offset + r.length <= writeBuffer.size());
+			recordOut.assign(writeBuffer.data() + r.offset, r.length);
+			return true;
+			}
+
+		// Check committed records.
+		uint32_t idx = findRecord(id);
+		if (idx >= records.size())
+			return true;	// Record does not exist.
+
+		const recordInfo& r = records[idx];
+		
+		// Lazily open the archive.
+		if (!file.isOpen()) {
+			if (!file.openRead(filename.c_str()))
+				return false;
+			}
+		if (!file.seek(r.offset))
+			return false;
+
+		recordOut.resize(r.length);
+		if (r.length) {
+			if (!file.read(recordOut.data(), r.length))
+				return false;
+			}
+		return true;
+		}
+		
+	bool saveRecord(const recordId id, const buffer buff) {
+		STTSAV_ASSERT(hasLoadedRecords);
+
+		// Remove any existing pending commits
+		uint32_t p = findPendingRecord(id);
+		if (p < pendingRecords.size())
+			pendingRecords.erase(pendingRecords.begin() + p);
+
+		recordInfo r;
+		r.record = id;
+		appendPendingBlob(r, buff);
+		pendingRecords.push_back(r);
+		return true;
+		}
+		
+	bool deleteRecord(const recordId id) {
+		STTSAV_ASSERT(hasLoadedRecords);
+
+		// Remove any pending entry
+		uint32_t p = findPendingRecord(id);
+		while (p < pendingRecords.size()) {
+			pendingRecords.erase(pendingRecords.begin() + p);
+			p = findPendingRecord(id);
+			}
+
+		// Does it exist on disc?
+		uint32_t idx = findRecord(id);
+		if (idx >= records.size())
+			return true; // not found, we don't need a tombstone
+
+		recordInfo tombstone = records[idx];
+		tombstone.length = 0;
+
+		pendingRecords.push_back(tombstone);
+		return true;
+		}
+		
+	bool loadRecordsWorker() {
+		// Returns TRUE if archive is ok or truncated and we can recover feilds
+		// Returns FALSE if archive is corrupt and unusable
+		STTSAV_ASSERT(file.isOpen());
+		fileLength = file.length();
+
+		// Empty file?
+		if (fileLength < sizeof(ArchiveFileHeader)) {
+			hasLoadedRecords = true;
+			lastDirectoryOffsetAddr = ArchiveFileHeader::getDirectoryOffsetAddr(0);
+			return true;
+			}
+
+		// Read archive header.
+		if (!file.seek(0))
+			return false;
+
+		if (!file.read(mHeader))
+			return false;
+
+		// Invalid archive.
+		if (mHeader.magic != archiveConstants::ARCHIVE_MAGIC || mHeader.version != archiveConstants::ARCHIVE_VERSION)
+			return false;
+
+		// First directory has been truncated
+		if (mHeader.directoryOffset > fileLength)
+			return false;
+
+		// No directories yet.
+		if (mHeader.directoryOffset == 0) {
+			hasLoadedRecords = true;
+			lastDirectoryOffsetAddr = ArchiveFileHeader::getDirectoryOffsetAddr(0);
+			return true;
+			}
+
+		uint64_t directoryOffset = mHeader.directoryOffset;
+
+		while (directoryOffset) {
+			// Truncated / corrupt tail.
+			if (directoryOffset >= fileLength)
+				break;
+			if (!file.seek(directoryOffset))
+				break;
+			ArchiveDirectoryHeader dh;
+			if (!file.read(dh))
+				break;
+			// Validate that the entire delta fits in the file.
+			const uint64_t deltaEnd = directoryOffset + sizeof(ArchiveDirectoryHeader) + uint64_t(dh.numRecords) * sizeof(recordInfo);
+
+			if (deltaEnd > fileLength)
+				break;
+
+			STTSAV_VECTOR<recordInfo> delta;
+			delta.resize(dh.numRecords);
+
+			if (!file.readArray(delta.data(), dh.numRecords))
+				break;
+
+			// Apply this delta.
+			applyDeltas(delta);
+
+			// Remember where the next directory pointer lives.
+			lastDirectoryOffsetAddr = ArchiveDirectoryHeader::getDirectoryOffsetAddr(directoryOffset);
+
+			// Self-loop protection.
+			if (dh.nextDirectoryOffset == directoryOffset)
+				break;
+
+			directoryOffset = dh.nextDirectoryOffset;
+			}
+
+		hasLoadedRecords = true;
+		fileLength = file.length();
+		return true;
+		}
+	
+	void initNewFileWorker() {
+		STTSAV_ASSERT(file.isOpen());
+		
+		initHeader();
+		lastDirectoryOffsetAddr = mHeader.getDirectoryOffsetAddr(0);
+		hasLoadedRecords = true;
+		
+		if (!file.write(mHeader))
+			STTSAV_ASSERT(false);
+
+		fileLength = sizeof(ArchiveFileHeader);
+		}
+	
+	bool prepareFileForWriting() {
+		// Already open for read/write?
+		if (file.isOpen() && file.getMode() == FileHandle::OM_READ_WRITE)
+			return true;
+
+		// Upgrade a read-only handle.
+		if (file.isOpen())
+			file.close();
+
+		if (!fileExists) {
+			// First write to this archive.
+			if (!file.openReadWrite(filename.c_str(), true))
+				return false;
+
+			initNewFileWorker();
+			}
+		else {
+			// Existing archive.
+			if (!file.openReadWrite(filename.c_str(), false))
+				return false;
+				
+			if (!hasLoadedRecords) {
+				bool isOk = loadRecordsWorker();
+				
+				if (!isOk) {
+					// corrupted. create a new blank file
+					if (!file.truncateAndReopen(filename.c_str()))
+						return false;
+					initNewFileWorker();
+					}
+				}
+			}
+
+		return true;
+		}
+
+protected:
+	void applyDeltas(const STTSAV_VECTOR<recordInfo>& deltas) {
+		for (const recordInfo& r : deltas) {
+			uint32_t idx = findRecord(r.record);
+			if (r.length == 0) {
+				// Delete existing record.
+				if (idx < records.size())
+					records.erase(records.begin() + idx);
+				continue;
+				}
+			if (idx < records.size()) {
+				// Replace existing record.
+				records[idx] = r;
+				}
+			else {
+				// Insert new record, maintaining sorted order.
+				auto it = std::lower_bound( records.begin(), records.end(), r.record, recordInfo::compareRecords());
+				records.insert(it, r);
+				}
+			}
+		}
+	
+public:
+		
+	bool commit() {
+		if (pendingRecords.empty())
+			return true;
+
+		// Phase 1 - get a valid write file handle
+		if (!prepareFileForWriting()) {
+			// error! we have no valid file handle
+			return false;
+			}
+		STTSAV_ASSERT(hasLoadedRecords);
+
+		// Phase 2 - write pending blob data to disc
+		{
+		file.seek(fileLength);
+		for (recordInfo& r : pendingRecords) {
+			if (r.length == 0)
+				continue;
+			const char* src = writeBuffer.data() + r.offset;
+			if (!file.write(src, r.length))
+				return false;
+			r.offset = fileLength;
+			fileLength += r.length;
+			}
+		}
+		
+		// Phase 3 - Write directory updates.
+		const uint64_t newDirectoryOffset = fileLength;
+		{
+			ArchiveDirectoryHeader dh;
+			dh.numRecords = pendingRecords.size();
+			dh.reserved = 0;
+			dh.nextDirectoryOffset = 0;
+
+			if (!file.write(dh))
+				return false;
+			
+			// Just memcpy the vector to file
+			STTSAV_ASSERT(std::is_trivially_copyable<recordInfo>::value);
+			if (!pendingRecords.empty())
+				if (!file.writeArray( pendingRecords.data(), pendingRecords.size() ))
+					return false;
+				
+			fileLength += sizeof(ArchiveDirectoryHeader) + (pendingRecords.size() * sizeof(recordInfo));
+		}
+
+		// Phase 4 - Link the new directory into the directory chain.
+		{
+			// Update the previous directory (or header for the first directory) to
+			// point at this newly written directory.
+			if (!file.seek(lastDirectoryOffsetAddr))
+				return false;
+
+			if (!file.write(newDirectoryOffset))
+				return false;
+
+			// Remember where this directory's "next directory" pointer lives.
+			lastDirectoryOffsetAddr = ArchiveDirectoryHeader::getDirectoryOffsetAddr(newDirectoryOffset);
+		}
+
+		// Phase 5 - Apply pending changes to the in-memory directory.
+		applyDeltas(pendingRecords);
+
+		pendingRecords.clear();
+		pendingRecords.shrink_to_fit();
+		writeBuffer.clear();
+		writeBuffer.shrink_to_fit();
+
+		return true;
+		}
+		
+	bool compact() {
+		// Cleans the archive file, removing dead blobs and cleaning up the record directory
+		
+		// Nothing to compact.
+		if (!fileExists)
+			return true;
+			
+		// Ensure the archive is realised.
+		if (!hasLoadedRecords) {
+			if (!prepareFileForWriting())
+				return false;
+			}
+
+		// Commit any pending writes first.
+		if (!pendingRecords.empty()) {
+			if (!commit())
+				return false;
+			}
+			
+		// Delete if no records
+		if (!records.size()) {
+			if (file.isOpen())
+				file.close();
+			FileOps::deleteFile(filename.c_str());
+			fileExists = false;
+			fileLength = 0;
+			wastedBytes = 0;
+			return true;
+			}
+
+		// Open source archive if necessary.
+		if (!file.isOpen()) {
+			if (!file.openRead(filename.c_str()))
+				return false;
+			}
+
+		// Phase 1 - Create temporary archive.
+		STTSAV_STRING tmpFilename = filename + ".tmp";
+
+		FileHandle out;
+		if (!out.openReadWrite(tmpFilename.c_str(), true))
+			return false;
+		
+		// Guard to remove temp in case of failure
+		struct tempFileGuard {
+			FileHandle* tmpOut;
+			const char* tmpName;
+			
+			~tempFileGuard() {
+				if (tmpOut) {
+					tmpOut->close();
+					FileOps::deleteFile(tmpName);
+					}
+				}
+			};
+		tempFileGuard G;
+		G.tmpOut = &out;
+		G.tmpName = tmpFilename.c_str();
+
+		// Start writing output
+		ArchiveFileHeader newHeader;
+		newHeader.magic = archiveConstants::ARCHIVE_MAGIC;
+		newHeader.version = archiveConstants::ARCHIVE_VERSION;
+		newHeader.reserved = 0;
+		newHeader.directoryOffset = sizeof(ArchiveFileHeader);
+
+		if (!out.write(newHeader))
+			return false;
+
+		uint64_t nextOffset = sizeof(ArchiveFileHeader);
+
+		// Phase 2 - Copy all live blobs.
+		STTSAV_STRING blobBuffer;
+
+		for (recordInfo& r : records) {
+			if (!FileHandle::copyRange(file, r.offset, r.length, out))
+				return false;
+
+			r.offset = nextOffset;
+			nextOffset += r.length;
+			}
+
+		// Phase 3 - Write a single directory.
+		const uint64_t directoryOffset = nextOffset;
+
+		ArchiveDirectoryHeader dh;
+		dh.numRecords = (uint32_t)records.size();
+		dh.reserved = 0;
+		dh.nextDirectoryOffset = 0;
+
+		if (!out.write(dh))
+			return false;
+
+		if (!out.writeArray(records.data(), (uint32_t)records.size()))
+			return false;
+			
+		nextOffset += sizeof(ArchiveDirectoryHeader) + (uint64_t(records.size()) * sizeof(recordInfo));
+
+		// Phase 4 - Patch the header.
+		newHeader.directoryOffset = directoryOffset;
+
+		if (!out.seek(0))
+			return false;
+
+		if (!out.write(newHeader))
+			return false;
+
+		if (!out.flush())
+			return false;
+
+		out.close();
+		G.tmpOut = NULL; // disarm the guard
+
+		// Phase 5 - Replace the old archive.
+		file.close();
+
+		if (!FileOps::replace(tmpFilename.c_str(), filename.c_str()))
+			return false;
+
+		// Re-open lazily later.
+		fileLength = nextOffset;
+		wastedBytes = 0;
+		lastDirectoryOffsetAddr = ArchiveDirectoryHeader::getDirectoryOffsetAddr(directoryOffset);
+		return true;
+		}
 	};
+
 
 } // namespace sttSav

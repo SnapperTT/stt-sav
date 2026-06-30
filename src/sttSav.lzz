@@ -1,11 +1,31 @@
 #hdr
+#include <cstdint>
 // Header file
 #ifndef STTSAV_STRING
+	#include <string>
 	#define STTSAV_STRING std::string
 #endif
 #ifndef STTSAV_VECTOR
+	#include <vector>
 	#define STTSAV_VECTOR std::vector
 #endif
+#ifndef STTSAV_ASSERT
+	#include <cassert>
+	#define STTSAV_ASSERT assert
+#endif
+#ifndef STTSAV_NEW
+	#define STTSAV_NEW(X) new X
+#endif
+#ifndef STTSAV_DEL
+	#define STTSAV_DEL(X,SZ) delete X 
+#endif
+#ifndef STTSAV_NEW_ARR
+	#define STTSAV_NEW_ARR(X, SZ) new X[SZ];
+#endif
+#ifndef STTSAV_DEL_ARR
+	#define STTSAV_DEL_ARR(X, SZ) delete[] X;
+#endif
+
 namespace sttSav {
 struct archiveId { uint32_t value; };
 struct recordId  { uint32_t value; };
@@ -16,7 +36,14 @@ struct recordInfo {
 	recordId record;
 	uint32_t offset;
 	uint32_t length;
+	
+	struct compareRecords {
+		inline bool operator()(const recordInfo& a, const recordInfo& b) const { return a.record.value < b.record.value; };
+		inline bool operator()(const recordInfo& a, const recordId& r) const  { return a.record.value < r.value; };
+		inline bool operator()(const recordId& r, const recordInfo& b) const { return r.value < b.record.value; };
+		};
 	};
+	
 struct splitResult {
     archiveId aid;
     uint32_t size;
@@ -92,6 +119,7 @@ struct transactionMode {
 
 #src
 // Implmentation file
+#include <algorithm>
 #end
 
 // Common implementation

@@ -24,19 +24,10 @@ int main (int argc, char * * argv);
 // example.cpp
 //
 
-#include <cstdint>
 #include <cstdio>
 #include <cstring>
 using std::printf;
 
-#define STTSAV_STRING std::string
-#define STTSAV_VECTOR std::vector
-#include <string>
-#include <vector>
-#define STTSAV_ASSERT assert
-#include <cassert>
-#define STTSAV_NEW(X) new X
-#define STTSAV_DEL(X,SZ) delete X 
 
 // build the implementation
 #define STTSAV_DBG
@@ -44,7 +35,6 @@ using std::printf;
 #include "stt-sav.h"
 
 // PlantartyFace archive system
-#include <algorithm>
 #include "planetaryFaceUVArchiveDictionary.h"
 #include "XYArchiveDictionary.h"
 

@@ -17,6 +17,14 @@
 namespace sttSav {
 	
 struct FileOps {
+	static bool exists(const char* filename) {
+		#ifdef _WIN32
+			return _access(filename, 0) == 0;
+		#else
+			return access(filename, F_OK) == 0;
+		#endif
+		}
+	
 	static bool move(const char* filenameOld, const char* filenameNew) {
 		return ::rename(filenameOld, filenameNew) == 0;
 		}
@@ -31,6 +39,10 @@ struct FileOps {
 		#else
 			return ::rename(filenameOld, filenameNew) == 0;
 		#endif
+		}
+
+	static bool deleteFile(const char* filename) {
+		return ::remove(filename) == 0;
 		}
 	};
 
@@ -78,6 +90,16 @@ public:
 		if (!mFile && createIfMissing)
 			mFile = fopen(filename, "wb+");
 			
+		if (!mFile)
+			return false;
+		mMode = OM_READ_WRITE;
+		return true;
+		}
+		
+	bool truncateAndReopen(const char* filename) {
+		if (isOpen()) close();
+		mFile = fopen(filename, "wb+");
+		
 		if (!mFile)
 			return false;
 		mMode = OM_READ_WRITE;
@@ -156,6 +178,20 @@ public:
 	bool write(const T& value) {
 		return write(&value, sizeof(T));
 		}
+	
+	template<typename T>
+	bool writeArray(const T* data, uint32_t count) {
+		if (!count) return true;
+		STTSAV_ASSERT(std::is_trivially_copyable<T>::value);
+		return write(data, count * sizeof(T));
+		}
+		
+	template<typename T>
+	bool readArray(T* dst, const uint32_t count) {
+		if (!count) return true;
+		STTSAV_ASSERT(std::is_trivially_copyable<T>::value);
+		return read(dst, count * sizeof(T));
+		}
 
 	bool truncate(const uint64_t newLength) {
 		if (!mFile)
@@ -167,6 +203,37 @@ public:
 #else
 		return ftruncate(fileno(mFile), (off_t)newLength) == 0;
 #endif
+		}
+	
+	
+	static bool copyRange_worker(FileHandle& src, const uint64_t srcOffset, const uint32_t len, FileHandle& dst, char* workingBuff) {
+		// workingBuff must be big enough to hold
+		if (!src.read(workingBuff, len))
+			return false;
+		if (!dst.write(workingBuff, len))
+			return false;
+		if (!src.seek(srcOffset))
+			return false;
+		return true;
+		}
+	
+	static bool copyRange(FileHandle& src, const uint64_t srcOffset, const uint32_t len, FileHandle& dst) {
+		// Copies a block from src to dst, appending dst
+		constexpr uint32_t BUFFER_SIZE = 64 * 1024;
+		char buff_mem[BUFFER_SIZE];
+		char* buff = &buff_mem[0];
+		
+		bool hasAlloced = false;
+		if (len+1 >= BUFFER_SIZE) {
+			buff = STTSAV_NEW_ARR(char, len+1);
+			hasAlloced = true;
+			}
+		
+		bool r = copyRange_worker(src, srcOffset, len, dst, buff);
+		
+		if (hasAlloced)
+			STTSAV_DEL_ARR(buff, BUFFER_SIZE+1);
+		return r;
 		}
 	};
 	
