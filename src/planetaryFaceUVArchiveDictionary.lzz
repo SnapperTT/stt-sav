@@ -260,6 +260,8 @@ public:
 		return workingCount;
 		}
 		
+	uint32_t getArchiveCountUpperBound() const { return mLookup.mLookup.size(); }
+		
 	STTSAV_STRING encodeDictionary() const {
 		STTSAV_STRING r;
 		StringEncoder enc(r);

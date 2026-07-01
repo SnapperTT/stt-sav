@@ -112,6 +112,7 @@ namespace sttSav
     archiveKey buildKey (uint16_t const planet, uint8_t const face, uint8_t const flags, uint8_t const localU, uint8_t const localV) const;
     archiveId getArchiveId (archiveKey const key) const;
     uint32_t extractArchiveIds (archiveId * archivesOut, uint32_t & numArchivesOut, uint32_t const maxArchivesOut) const;
+    uint32_t getArchiveCountUpperBound () const;
     STTSAV_STRING encodeDictionary () const;
     uint32_t decodeDictionary (STTSAV_STRING const & data);
     void getArchiveFilename (archiveId const id, char * nameOut, uint32_t & lenOut, uint32_t const maxLen) const;
@@ -364,6 +365,11 @@ namespace sttSav
 		mLookup.extractArchiveIdsWorker(workingCount, archivesOut, numArchivesOut, maxArchivesOut);
 		return workingCount;
 		}
+}
+namespace sttSav
+{
+  uint32_t PlanetaryFaceUVArchiveDictionary::getArchiveCountUpperBound () const
+                                                   { return mLookup.mLookup.size(); }
 }
 namespace sttSav
 {

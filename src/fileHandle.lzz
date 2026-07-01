@@ -44,6 +44,15 @@ struct FileOps {
 	static bool deleteFile(const char* filename) {
 		return ::remove(filename) == 0;
 		}
+		
+    static STTSAV_STRING joinPath(const STTSAV_STRING& lhs, const STTSAV_STRING& rhs) {
+		#ifdef _WIN32
+		constexpr char SEP = '\\';
+		#else
+		constexpr char SEP = '/';
+		#endif
+		return lhs + SEP + rhs;
+		}
 	};
 
 class FileHandle {

@@ -4,10 +4,6 @@
 #end
 
 #src
-#include <cstdio>
-#include <cstring>
-using std::printf;
-
 
 // build the implementation
 #define STTSAV_DBG

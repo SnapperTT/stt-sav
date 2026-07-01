@@ -46,15 +46,22 @@ public:
 	FileHandle file;
     bool hasLoadedRecords;
     bool fileExists;
+    bool touchedThisTransaction;
     
      // in-flight write data
     STTSAV_VECTOR<recordInfo> pendingRecords;
 	STTSAV_STRING writeBuffer;
     
-    inline ArchiveFile() : aid({0}), fileLength(0), wastedBytes(0), lastDirectoryOffsetAddr(0), hasLoadedRecords(false), fileExists(false) {
+    inline ArchiveFile() : aid({0}), fileLength(0), wastedBytes(0), lastDirectoryOffsetAddr(0), hasLoadedRecords(false), fileExists(false), touchedThisTransaction(false) {
 		initHeader();
 		}
 		
+// no copy
+private:
+	ArchiveFile(const ArchiveFile& other);
+	ArchiveFile& operator=(const ArchiveFile& other);
+
+public:
 	void initHeader() {
 		mHeader.magic = archiveConstants::ARCHIVE_MAGIC;
 		mHeader.version = archiveConstants::ARCHIVE_VERSION;
@@ -177,6 +184,10 @@ public:
 
 		pendingRecords.push_back(tombstone);
 		return true;
+		}
+		
+	bool loadRecords() {
+		return loadRecordsWorker();
 		}
 		
 	bool loadRecordsWorker() {

@@ -24,10 +24,6 @@ int main (int argc, char * * argv);
 // example.cpp
 //
 
-#include <cstdio>
-#include <cstring>
-using std::printf;
-
 
 // build the implementation
 #define STTSAV_DBG

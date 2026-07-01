@@ -14,6 +14,7 @@
 #ifndef LZZ_sttSav_hh
 #define LZZ_sttSav_hh
 #include <cstdint>
+#include <cstring>
 // Header file
 #ifndef STTSAV_STRING
 	#include <string>
@@ -107,6 +108,12 @@ public:
 	
 	// Returns the total number of archives in the dictionary. Set "archivesOut" to NULL to just query. numArchivesOut is the number of archives written to the archivesOut array
 	virtual uint32_t extractArchiveIds(archiveId* archivesOut, uint32_t& numArchivesOut, const uint32_t maxArchivesOut) const = 0;
+	
+	// Returns the number of archives in this dictionary
+	virtual uint32_t getNumArchives() const { uint32_t numArchivesOut = 0; return extractArchiveIds(NULL, numArchivesOut, 0); }
+	
+	// Returns a number greater than the number of archives in this dictionary. Use this to create buffers large enough to store the output of extractArchiveIds()
+	virtual uint32_t getArchiveCountUpperBound() const { return getNumArchives(); }
 	
 	// Serialises this dictionary for disc storage
 	virtual STTSAV_STRING encodeDictionary() const = 0;
@@ -309,6 +316,7 @@ namespace sttSav
     static bool remove (char const * filename);
     static bool replace (char const * filenameOld, char const * filenameNew);
     static bool deleteFile (char const * filename);
+    static STTSAV_STRING joinPath (STTSAV_STRING const & lhs, STTSAV_STRING const & rhs);
   };
 }
 namespace sttSav
@@ -452,6 +460,18 @@ namespace sttSav
   bool FileOps::deleteFile (char const * filename)
                                                      {
 		return ::remove(filename) == 0;
+		}
+}
+namespace sttSav
+{
+  STTSAV_STRING FileOps::joinPath (STTSAV_STRING const & lhs, STTSAV_STRING const & rhs)
+                                                                                      {
+		#ifdef _WIN32
+		constexpr char SEP = '\\';
+		#else
+		constexpr char SEP = '/';
+		#endif
+		return lhs + SEP + rhs;
 		}
 }
 namespace sttSav
@@ -2179,9 +2199,14 @@ namespace sttSav
     FileHandle file;
     bool hasLoadedRecords;
     bool fileExists;
+    bool touchedThisTransaction;
     STTSAV_VECTOR <recordInfo> pendingRecords;
     STTSAV_STRING writeBuffer;
     ArchiveFile ();
+  private:
+    ArchiveFile (ArchiveFile const & other);
+    ArchiveFile & operator = (ArchiveFile const & other);
+  public:
     void initHeader ();
     void setFilename (ArchiveManager const & AM);
   protected:
@@ -2192,6 +2217,7 @@ namespace sttSav
     bool loadRecord (recordId const id, STTSAV_STRING & recordOut);
     bool saveRecord (recordId const id, buffer const buff);
     bool deleteRecord (recordId const id);
+    bool loadRecords ();
     bool loadRecordsWorker ();
     void initNewFileWorker ();
     bool prepareFileForWriting ();
@@ -2219,8 +2245,8 @@ namespace sttSav
 namespace sttSav
 {
   LZZ_INLINE ArchiveFile::ArchiveFile ()
-    : aid ({0}), fileLength (0), wastedBytes (0), lastDirectoryOffsetAddr (0), hasLoadedRecords (false), fileExists (false)
-                                                                                                                                           {
+    : aid ({0}), fileLength (0), wastedBytes (0), lastDirectoryOffsetAddr (0), hasLoadedRecords (false), fileExists (false), touchedThisTransaction (false)
+                                                                                                                                                                          {
 		initHeader();
 		}
 }
@@ -2380,6 +2406,13 @@ namespace sttSav
 
 		pendingRecords.push_back(tombstone);
 		return true;
+		}
+}
+namespace sttSav
+{
+  bool ArchiveFile::loadRecords ()
+                           {
+		return loadRecordsWorker();
 		}
 }
 namespace sttSav
@@ -2770,8 +2803,13 @@ namespace sttSav
     bool keepFilesOpen;
   public:
     STTSAV_VECTOR <ArchiveFile*> mArchives;
+    STTSAV_VECTOR <ArchiveFile*> touchedArchives;
     ArchiveManager (ArchiveDictionaryI * _mDictionary);
     ~ ArchiveManager ();
+    void clearArchives ();
+    ArchiveFile * getOrCreate (archiveId const aid);
+    void initArchiveFilesFromDictionary ();
+    void applyArchiveDelta (archiveId const * oldIds, uint32_t const numOld, archiveId const * newIds, uint32_t const numNew);
     bool loadRecord (archiveKey const key, recordId const record, STTSAV_STRING & out);
     bool saveRecord (archiveKey const key, recordId const record, char const * buff, uint32_t const len);
     bool saveRecord (archiveKey const key, recordId const record, buffer const buff);
@@ -2817,7 +2855,226 @@ namespace sttSav
 {
   ArchiveManager::~ ArchiveManager ()
                           {
+		clearArchives();
+		}
+}
+namespace sttSav
+{
+  void ArchiveManager::clearArchives ()
+                             {
 		closeOpenFiles();
+		for (ArchiveFile* a : mArchives) {
+			if (!a)
+				continue;
+			if (a->file.isOpen())
+				a->file.close();
+			STTSAV_DEL(a, sizeof(ArchiveFile));
+			}
+		mArchives.clear();
+		}
+}
+namespace sttSav
+{
+  ArchiveFile * ArchiveManager::getOrCreate (archiveId const aid)
+                                                      {
+		// creates a logical archiveFile (not a physical file)
+		STTSAV_ASSERT(aid.value);
+
+		if (aid.value > mArchives.size())
+			mArchives.resize(aid.value, NULL);
+
+		mArchives[aid.value - 1] = STTSAV_NEW(ArchiveFile);
+
+		ArchiveFile* a = mArchives[aid.value - 1];
+		a->aid = aid;
+		char filename[512];
+		uint32_t len = 0;
+		mDictionary->getArchiveFilename(aid, filename, len, sizeof(filename));
+
+		a->filename = FileOps::joinPath(mBasePath, filename);
+		a->fileExists = FileOps::exists(a->filename.c_str());
+		return a;
+		}
+}
+namespace sttSav
+{
+  void ArchiveManager::initArchiveFilesFromDictionary ()
+                                              {
+		// Delete any existing ArchiveFile handles
+		clearArchives();
+
+		// Fetch all archive ids.
+		const uint32_t bufferSz = mDictionary->getArchiveCountUpperBound();
+
+		STTSAV_VECTOR<archiveId> ids;
+		ids.resize(bufferSz);
+		uint32_t numArchives = 0;
+		mDictionary->extractArchiveIds(ids.data(), numArchives, bufferSz);
+
+		// Allocate sparse lookup.
+		mArchives.resize(numArchives, NULL);
+		
+		for (uint32_t i = 0; i < numArchives; ++i)
+			getOrCreate(ids[i]);
+		}
+}
+namespace sttSav
+{
+  void ArchiveManager::applyArchiveDelta (archiveId const * oldIds, uint32_t const numOld, archiveId const * newIds, uint32_t const numNew)
+                                                                                                                               {
+		// What we do is we have a list of destinations. We write all the records from the oldIds to the destArchives,
+		// then destructively merge the destArchives into mArchives 
+		struct DestinationArchive {
+			archiveId aid;
+			ArchiveFile* archive;
+			bool isSurvivor;
+			};
+		STTSAV_VECTOR<DestinationArchive> destArchives;
+
+		// Phase 1 - Ensure all source archives are realised.
+		for (uint32_t i = 0; i < numOld; ++i) {
+			const archiveId aid = oldIds[i];
+
+			if (!aid.value || aid.value > mArchives.size())
+				continue;
+
+			ArchiveFile* src = mArchives[aid.value - 1];
+			if (!src)
+				continue;
+
+			if (!src->hasLoadedRecords) {
+				if (!src->loadRecords())
+					STTSAV_ASSERT(false);
+				}
+			}
+
+		// Phase 2 - Create destination archives.
+		//
+		// Surviving archives are written to "<name>.tmp".
+		// Newly created archives are written directly to their final filename.
+		for (uint32_t i = 0; i < numNew; ++i) {
+			const archiveId aid = newIds[i];
+
+			bool survives = false;
+			for (uint32_t j = 0; j < numOld; ++j) {
+				if (oldIds[j].value == aid.value) {
+					survives = true;
+					break;
+					}
+				}
+
+			ArchiveFile* dst = STTSAV_NEW(ArchiveFile);
+
+			dst->aid = aid;
+
+			char filename[512];
+			uint32_t len = 0;
+			mDictionary->getArchiveFilename(aid, filename, len, sizeof(filename));
+
+			dst->filename = FileOps::joinPath(mBasePath, filename);
+
+			if (survives)
+				dst->filename += ".tmp";
+
+			dst->fileExists = false;
+
+			DestinationArchive da;
+			da.aid = aid;
+			da.archive = dst;
+			da.isSurvivor = survives;
+
+			destArchives.push_back(da);
+			}
+
+		// =========================================================================
+		// Phase 3 - Remap records.
+		//
+		// For each source archive:
+		//
+		//   - Iterate committed records.
+		//   - Iterate pending records.
+		//   - Pending writes override committed records.
+		//   - Tombstones suppress committed records.
+		//   - Route every surviving record into one of destArchives.
+		//
+		// Destination selection should use:
+		//
+		//     mDictionary->getArchiveIdFromShortlist(...)
+		//
+		// Every record must end up in exactly one destination archive.
+		// =========================================================================
+
+		// TODO
+
+		// Phase 4 - Commit destination archives.
+		for (DestinationArchive& d : destArchives) {
+			if (!d.archive->commit())
+				STTSAV_ASSERT(false);
+			}
+		for (DestinationArchive& d : destArchives) {
+			if (d.archive->file.isOpen())
+				d.archive->file.flush();
+			}
+		for (DestinationArchive& d : destArchives) {
+			if (d.archive->file.isOpen())
+				d.archive->file.close();
+			}
+
+		// Phase 5 - Replace surviving archives.
+		for (DestinationArchive& d : destArchives) {
+			if (!d.isSurvivor)
+				continue;
+
+			STTSAV_STRING finalName = d.archive->filename;
+			finalName.resize(finalName.size() - 4); // remove ".tmp"
+
+			if (!FileOps::replace( d.archive->filename.c_str(), finalName.c_str()))
+				STTSAV_ASSERT(false);
+
+			d.archive->filename = finalName;
+			}
+
+		// Phase 6 - Remove obsolete source archives.
+		for (uint32_t i = 0; i < numOld; ++i) {
+			const archiveId aid = oldIds[i];
+
+			bool survives = false;
+			for (uint32_t j = 0; j < numNew; ++j) {
+				if (newIds[j].value == aid.value) {
+					survives = true;
+					break;
+					}
+				}
+
+			if (survives)
+				continue;
+			
+			if (!aid.value || aid.value > mArchives.size())
+				continue;
+			
+			ArchiveFile* src = mArchives[aid.value - 1];
+			if (!src)
+				continue;
+
+			if (src->file.isOpen())
+				src->file.close();
+
+			FileOps::deleteFile(src->filename.c_str());
+
+			STTSAV_DEL(src, sizeof(ArchiveFile));
+			mArchives[aid.value - 1] = NULL;
+			}
+
+		// Phase 7 - merge our mArchive vectors
+		for (DestinationArchive& d : destArchives) {
+			if (d.aid.value > mArchives.size())
+				mArchives.resize(d.aid.value, NULL);
+
+			if (mArchives[d.aid.value - 1])
+				STTSAV_DEL(mArchives[d.aid.value - 1], sizeof(ArchiveFile));
+				
+			mArchives[d.aid.value - 1] = d.archive;
+			}
 		}
 }
 namespace sttSav
@@ -2912,7 +3169,16 @@ namespace sttSav
 {
   void ArchiveManager::closeOpenFiles ()
                               {
-		//...
+		for (ArchiveFile* AF : touchedArchives) {
+			if (AF) {
+				AF->touchedThisTransaction = false;
+				if (!AF->file.isOpen())
+					continue;
+				AF->file.flush();
+				AF->file.close();
+				}
+			}
+		touchedArchives.clear();
 		}
 }
 namespace sttSav

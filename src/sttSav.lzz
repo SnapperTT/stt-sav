@@ -1,5 +1,6 @@
 #hdr
 #include <cstdint>
+#include <cstring>
 // Header file
 #ifndef STTSAV_STRING
 	#include <string>
@@ -93,6 +94,12 @@ public:
 	
 	// Returns the total number of archives in the dictionary. Set "archivesOut" to NULL to just query. numArchivesOut is the number of archives written to the archivesOut array
 	virtual uint32_t extractArchiveIds(archiveId* archivesOut, uint32_t& numArchivesOut, const uint32_t maxArchivesOut) const = 0;
+	
+	// Returns the number of archives in this dictionary
+	virtual uint32_t getNumArchives() const { uint32_t numArchivesOut = 0; return extractArchiveIds(NULL, numArchivesOut, 0); }
+	
+	// Returns a number greater than the number of archives in this dictionary. Use this to create buffers large enough to store the output of extractArchiveIds()
+	virtual uint32_t getArchiveCountUpperBound() const { return getNumArchives(); }
 	
 	// Serialises this dictionary for disc storage
 	virtual STTSAV_STRING encodeDictionary() const = 0;

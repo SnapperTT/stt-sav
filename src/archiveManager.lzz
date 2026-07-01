@@ -12,7 +12,8 @@ protected:
 	bool keepFilesOpen;
 
 public:
-	STTSAV_VECTOR<ArchiveFile*> mArchives;
+	STTSAV_VECTOR<ArchiveFile*> mArchives; // archiveId.value - 1 == index of this array
+	STTSAV_VECTOR<ArchiveFile*> touchedArchives; // what archives have been processed in the current batch?
 
 	ArchiveManager(ArchiveDictionaryI* _mDictionary) {
 		mDictionary = _mDictionary;
@@ -21,10 +22,218 @@ public:
 		minimumArchiveSize = 1048576; // 1MB
 		keepFilesOpen = false;
 		}
+	
 	~ArchiveManager() {
-		closeOpenFiles();
+		clearArchives();
 		}
+		
+	void clearArchives() {
+		closeOpenFiles();
+		for (ArchiveFile* a : mArchives) {
+			if (!a)
+				continue;
+			if (a->file.isOpen())
+				a->file.close();
+			STTSAV_DEL(a, sizeof(ArchiveFile));
+			}
+		mArchives.clear();
+		}
+	
+	ArchiveFile* getOrCreate(const archiveId aid) {
+		// creates a logical archiveFile (not a physical file)
+		STTSAV_ASSERT(aid.value);
 
+		if (aid.value > mArchives.size())
+			mArchives.resize(aid.value, NULL);
+
+		mArchives[aid.value - 1] = STTSAV_NEW(ArchiveFile);
+
+		ArchiveFile* a = mArchives[aid.value - 1];
+		a->aid = aid;
+		char filename[512];
+		uint32_t len = 0;
+		mDictionary->getArchiveFilename(aid, filename, len, sizeof(filename));
+
+		a->filename = FileOps::joinPath(mBasePath, filename);
+		a->fileExists = FileOps::exists(a->filename.c_str());
+		return a;
+		}
+	
+	void initArchiveFilesFromDictionary() {
+		// Delete any existing ArchiveFile handles
+		clearArchives();
+
+		// Fetch all archive ids.
+		const uint32_t bufferSz = mDictionary->getArchiveCountUpperBound();
+
+		STTSAV_VECTOR<archiveId> ids;
+		ids.resize(bufferSz);
+		uint32_t numArchives = 0;
+		mDictionary->extractArchiveIds(ids.data(), numArchives, bufferSz);
+
+		// Allocate sparse lookup.
+		mArchives.resize(numArchives, NULL);
+		
+		for (uint32_t i = 0; i < numArchives; ++i)
+			getOrCreate(ids[i]);
+		}
+	
+	void applyArchiveDelta(const archiveId* oldIds, const uint32_t numOld, const archiveId* newIds, const uint32_t numNew) {
+		// What we do is we have a list of destinations. We write all the records from the oldIds to the destArchives,
+		// then destructively merge the destArchives into mArchives 
+		struct DestinationArchive {
+			archiveId aid;
+			ArchiveFile* archive;
+			bool isSurvivor;
+			};
+		STTSAV_VECTOR<DestinationArchive> destArchives;
+
+		// Phase 1 - Ensure all source archives are realised.
+		for (uint32_t i = 0; i < numOld; ++i) {
+			const archiveId aid = oldIds[i];
+
+			if (!aid.value || aid.value > mArchives.size())
+				continue;
+
+			ArchiveFile* src = mArchives[aid.value - 1];
+			if (!src)
+				continue;
+
+			if (!src->hasLoadedRecords) {
+				if (!src->loadRecords())
+					STTSAV_ASSERT(false);
+				}
+			}
+
+		// Phase 2 - Create destination archives.
+		//
+		// Surviving archives are written to "<name>.tmp".
+		// Newly created archives are written directly to their final filename.
+		for (uint32_t i = 0; i < numNew; ++i) {
+			const archiveId aid = newIds[i];
+
+			bool survives = false;
+			for (uint32_t j = 0; j < numOld; ++j) {
+				if (oldIds[j].value == aid.value) {
+					survives = true;
+					break;
+					}
+				}
+
+			ArchiveFile* dst = STTSAV_NEW(ArchiveFile);
+
+			dst->aid = aid;
+
+			char filename[512];
+			uint32_t len = 0;
+			mDictionary->getArchiveFilename(aid, filename, len, sizeof(filename));
+
+			dst->filename = FileOps::joinPath(mBasePath, filename);
+
+			if (survives)
+				dst->filename += ".tmp";
+
+			dst->fileExists = false;
+
+			DestinationArchive da;
+			da.aid = aid;
+			da.archive = dst;
+			da.isSurvivor = survives;
+
+			destArchives.push_back(da);
+			}
+
+		// =========================================================================
+		// Phase 3 - Remap records.
+		//
+		// For each source archive:
+		//
+		//   - Iterate committed records.
+		//   - Iterate pending records.
+		//   - Pending writes override committed records.
+		//   - Tombstones suppress committed records.
+		//   - Route every surviving record into one of destArchives.
+		//
+		// Destination selection should use:
+		//
+		//     mDictionary->getArchiveIdFromShortlist(...)
+		//
+		// Every record must end up in exactly one destination archive.
+		// =========================================================================
+
+		// TODO
+
+		// Phase 4 - Commit destination archives.
+		for (DestinationArchive& d : destArchives) {
+			if (!d.archive->commit())
+				STTSAV_ASSERT(false);
+			}
+		for (DestinationArchive& d : destArchives) {
+			if (d.archive->file.isOpen())
+				d.archive->file.flush();
+			}
+		for (DestinationArchive& d : destArchives) {
+			if (d.archive->file.isOpen())
+				d.archive->file.close();
+			}
+
+		// Phase 5 - Replace surviving archives.
+		for (DestinationArchive& d : destArchives) {
+			if (!d.isSurvivor)
+				continue;
+
+			STTSAV_STRING finalName = d.archive->filename;
+			finalName.resize(finalName.size() - 4); // remove ".tmp"
+
+			if (!FileOps::replace( d.archive->filename.c_str(), finalName.c_str()))
+				STTSAV_ASSERT(false);
+
+			d.archive->filename = finalName;
+			}
+
+		// Phase 6 - Remove obsolete source archives.
+		for (uint32_t i = 0; i < numOld; ++i) {
+			const archiveId aid = oldIds[i];
+
+			bool survives = false;
+			for (uint32_t j = 0; j < numNew; ++j) {
+				if (newIds[j].value == aid.value) {
+					survives = true;
+					break;
+					}
+				}
+
+			if (survives)
+				continue;
+			
+			if (!aid.value || aid.value > mArchives.size())
+				continue;
+			
+			ArchiveFile* src = mArchives[aid.value - 1];
+			if (!src)
+				continue;
+
+			if (src->file.isOpen())
+				src->file.close();
+
+			FileOps::deleteFile(src->filename.c_str());
+
+			STTSAV_DEL(src, sizeof(ArchiveFile));
+			mArchives[aid.value - 1] = NULL;
+			}
+
+		// Phase 7 - merge our mArchive vectors
+		for (DestinationArchive& d : destArchives) {
+			if (d.aid.value > mArchives.size())
+				mArchives.resize(d.aid.value, NULL);
+
+			if (mArchives[d.aid.value - 1])
+				STTSAV_DEL(mArchives[d.aid.value - 1], sizeof(ArchiveFile));
+				
+			mArchives[d.aid.value - 1] = d.archive;
+			}
+		}
+	
 	// Api for single transactions
 	bool loadRecord(const archiveKey key, const recordId record, STTSAV_STRING& out) {
 		transaction t = transaction::makeLoad(key, record, out);
@@ -82,7 +291,16 @@ public:
 		}
 	
 	void closeOpenFiles() {
-		//...
+		for (ArchiveFile* AF : touchedArchives) {
+			if (AF) {
+				AF->touchedThisTransaction = false;
+				if (!AF->file.isOpen())
+					continue;
+				AF->file.flush();
+				AF->file.close();
+				}
+			}
+		touchedArchives.clear();
 		}
 	
 	void endBulkTransations() {
