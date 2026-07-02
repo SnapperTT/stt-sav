@@ -93,6 +93,43 @@ while (nTransations = queue.read(t, nTransations, 32)) {
 M.endBulkTransations(); // closes any open files
 ```
 
+# Maintenance:
+
+Archives are writen in append only. This is to make the archive files resistant against crashes or power outages.
+
+Archive files should also be split if they get too big and merged if they are too small.
+
+You *must* call the function `doMaintenance` periodocially
+
+```
+doMaintenance(const bool incremental, const bool aggressive);
+```
+
+This function performs maintenance on the ArchiveFiles
+- splits oversized ArchiveFiles
+- merges undersized groups of ArchiveFiles
+- compacts (removes dead entries) from ArchiveFiles
+
+incremental = true  => return after writing one file
+              false => scan all ArchiveFiles, and 
+aggressive  = true  => compact any files that have *any* wasted bytes
+              false => scan all ArchiveFiles, and compact only files with
+                        compactionRatio < (wastedSpace+usedSpace)/usedSpace
+
+
+ArchiveManager has the following parameters you can tweak:
+
+```
+class ArchiveManager {
+...
+	float compactionRatio; // (unused space + used space)/(used space) > this? Compact!
+	uint32_t maxArchiveSize; // bigger than this? split!
+	uint32_t minimumArchiveSize; // all archives smaller than this? 
+```
+
+Default values are 1.5, 8MB and 1MB respectively.
+
+
 # Building:
 This is a single header library. `#include "stt-sav.hh"`, and `#define STT_SAV_IMPL 1` in ONE compilation unit.
 

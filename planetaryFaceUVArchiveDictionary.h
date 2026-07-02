@@ -111,6 +111,8 @@ namespace sttSav
     void initNewDictionary ();
     archiveKey buildKey (uint16_t const planet, uint8_t const face, uint8_t const flags, uint8_t const localU, uint8_t const localV) const;
     archiveId getArchiveId (archiveKey const key) const;
+    bool archiveContains (archiveId const aid, archiveKey const key) const;
+    archiveId getArchiveIdFromShortlist (archiveKey const key, splitResult const * resultsIn, uint32_t const numResults) const;
     uint32_t extractArchiveIds (archiveId * archivesOut, uint32_t & numArchivesOut, uint32_t const maxArchivesOut) const;
     uint32_t getArchiveCountUpperBound () const;
     STTSAV_STRING encodeDictionary () const;
@@ -355,6 +357,20 @@ namespace sttSav
   archiveId PlanetaryFaceUVArchiveDictionary::getArchiveId (archiveKey const key) const
                                                            {
 		return mLookup.getArchiveId(key, const_cast<node*>(&root));
+		}
+}
+namespace sttSav
+{
+  bool PlanetaryFaceUVArchiveDictionary::archiveContains (archiveId const aid, archiveKey const key) const
+                                                                              {
+		return mLookup.archiveContains(aid, key);
+		}
+}
+namespace sttSav
+{
+  archiveId PlanetaryFaceUVArchiveDictionary::getArchiveIdFromShortlist (archiveKey const key, splitResult const * resultsIn, uint32_t const numResults) const
+                                                                                                                                 {
+		return getArchiveIdFromShortlist_worker(key, resultsIn, numResults);
 		}
 }
 namespace sttSav

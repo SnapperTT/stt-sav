@@ -46,13 +46,12 @@ public:
 	FileHandle file;
     bool hasLoadedRecords;
     bool fileExists;
-    bool touchedThisTransaction;
     
      // in-flight write data
     STTSAV_VECTOR<recordInfo> pendingRecords;
 	STTSAV_STRING writeBuffer;
     
-    inline ArchiveFile() : aid({0}), fileLength(0), wastedBytes(0), lastDirectoryOffsetAddr(0), hasLoadedRecords(false), fileExists(false), touchedThisTransaction(false) {
+    inline ArchiveFile() : aid({0}), fileLength(0), wastedBytes(0), lastDirectoryOffsetAddr(0), hasLoadedRecords(false), fileExists(false) {
 		initHeader();
 		}
 		
@@ -76,7 +75,6 @@ public:
 		filename = AM.mBasePath + buff;
 		}
 
-protected:
 	// helpers
 	// Record lookup
 	uint32_t findRecord(const recordId id) const {
@@ -103,6 +101,7 @@ protected:
 		return -1;
 		}
 
+protected:
 	void appendPendingBlob(recordInfo& r, const buffer buff) {
 		r.offset = writeBuffer.size();
 		r.length = buff.len;
@@ -110,7 +109,7 @@ protected:
 		}
 
 public:
-	bool loadRecord(const recordId id, STTSAV_STRING& recordOut) {
+	bool readRecord(const recordId id, STTSAV_STRING& recordOut) {
 		STTSAV_ASSERT(hasLoadedRecords);
 		recordOut.clear();
 
@@ -149,7 +148,7 @@ public:
 		return true;
 		}
 		
-	bool saveRecord(const recordId id, const buffer buff) {
+	bool writeRecord(const archiveKey key, const recordId id, const buffer buff) {
 		STTSAV_ASSERT(hasLoadedRecords);
 
 		// Remove any existing pending commits
@@ -158,6 +157,7 @@ public:
 			pendingRecords.erase(pendingRecords.begin() + p);
 
 		recordInfo r;
+		r.key = key;
 		r.record = id;
 		appendPendingBlob(r, buff);
 		pendingRecords.push_back(r);
@@ -249,7 +249,7 @@ public:
 				break;
 
 			// Apply this delta.
-			applyDeltas(delta);
+			applyDeltas(delta, false);
 
 			// Remember where the next directory pointer lives.
 			lastDirectoryOffsetAddr = ArchiveDirectoryHeader::getDirectoryOffsetAddr(directoryOffset);
@@ -260,6 +260,14 @@ public:
 
 			directoryOffset = dh.nextDirectoryOffset;
 			}
+			
+		// calcualte the waste
+		uint64_t liveBlobBytes = 0;
+		for (const recordInfo& r : records)
+			liveBlobBytes += r.length;
+		const uint64_t liveBytes = sizeof(ArchiveFileHeader) + uint64_t(records.size()) * sizeof(recordInfo) + liveBlobBytes;
+		STTSAV_ASSERT(fileLength >= liveBytes);
+		wastedBytes = fileLength - liveBytes;
 
 		hasLoadedRecords = true;
 		fileLength = file.length();
@@ -316,17 +324,22 @@ public:
 		}
 
 protected:
-	void applyDeltas(const STTSAV_VECTOR<recordInfo>& deltas) {
+	void applyDeltas(const STTSAV_VECTOR<recordInfo>& deltas, const bool updateWastedBytes) {
 		for (const recordInfo& r : deltas) {
 			uint32_t idx = findRecord(r.record);
 			if (r.length == 0) {
 				// Delete existing record.
+				if (updateWastedBytes)
+					wastedBytes += records[idx].length;
 				if (idx < records.size())
 					records.erase(records.begin() + idx);
+					
 				continue;
 				}
 			if (idx < records.size()) {
 				// Replace existing record.
+				if (updateWastedBytes)
+					wastedBytes += records[idx].length;
 				records[idx] = r;
 				}
 			else {
@@ -399,12 +412,14 @@ public:
 		}
 
 		// Phase 5 - Apply pending changes to the in-memory directory.
-		applyDeltas(pendingRecords);
+		applyDeltas(pendingRecords, true);
 
 		pendingRecords.clear();
 		pendingRecords.shrink_to_fit();
 		writeBuffer.clear();
 		writeBuffer.shrink_to_fit();
+		
+		wastedBytes += sizeof(ArchiveDirectoryHeader);
 
 		return true;
 		}

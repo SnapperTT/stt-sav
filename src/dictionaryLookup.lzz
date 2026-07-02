@@ -60,6 +60,12 @@ public:
 		return {0};
 		}
 		
+	bool archiveContains(const archiveId aid, const archiveKey key) const {
+		NODE* n = getNodeByArchiveId(aid);
+		if (!n) return false;
+		return n->containsExact(key);
+		}
+		
 	NODE* getNodeByArchiveId (const archiveId aid) const {
 		if (aid.value && aid.value-1 < mLookup.size())
 			return mLookup[aid.value-1].ptr;

@@ -28,9 +28,18 @@
 #endif
 
 namespace sttSav {
-struct archiveId { uint32_t value; };
-struct recordId  { uint32_t value; };
-struct archiveKey { uint32_t value; };
+struct archiveId {
+	uint32_t value; 
+	inline bool operator ==(const archiveId& v) const { return value == v.value; }
+	};
+struct recordId  {
+	uint32_t value;
+	inline bool operator ==(const archiveId& v) const { return value == v.value; }
+	};
+struct archiveKey {
+	uint32_t value;
+	inline bool operator ==(const archiveId& v) const { return value == v.value; }
+	};
 
 struct recordInfo {
 	archiveKey key;
@@ -50,6 +59,37 @@ struct splitResult {
     uint32_t size;
 	};
 
+// workaround for temp arrays not being a thing on msvc
+// used for stack allocated temporary arrays in function or block scope
+template <typename T, uint64_t S>
+struct tmpArr {
+protected:
+	T stackBuff[S];
+	T* heapBuff;
+	uint64_t sz;
+public:
+	inline void reserve(const uint64_t _sz) {
+		STTSAV_ASSERT(!heapBuff);
+		if (_sz > S)
+			heapBuff = STTSAV_NEW_ARR(T, _sz);
+		sz = _sz;
+		}
+	inline tmpArr() : heapBuff(NULL), sz(0) {}
+	inline tmpArr(const uint64_t _sz) : heapBuff(NULL), sz(0) { reserve(_sz); }
+	inline ~tmpArr() { if (heapBuff) STTSAV_DEL_ARR(heapBuff, sizeof(T)*sz); }
+	inline T* getBuffer() { return heapBuff ? heapBuff : &stackBuff[0]; }
+	inline uint64_t size() const { return sz; }
+	};
+	
+// Vector
+template <typename T>
+uint32_t push_back_vector_unique(STTSAV_VECTOR<T>& v, T&& t) {
+	for (uint32_t i = 0; i < v.size(); ++i) {
+		if (v[i] == t) return i;
+		}
+	v.push_back(std::move(t));
+	return v.size()-1;
+	}
 
 class ArchiveDictionaryI {
 public:
@@ -62,15 +102,13 @@ public:
 	///
 	/// Different applications may implement different dictionary strategies
 	/// (planetary quadtree, fixed grid, hash table, etc.)
-	
+
+// Core Api
 	inline ArchiveDictionaryI() {}
 	virtual ~ArchiveDictionaryI() {}
 	
 	//archiveKey buildKey(...) // <-- you should have some kind of buildKey function per dictionary
 	virtual archiveId getArchiveId(const archiveKey key) const = 0;
-	
-	// Fast lookup of archives from a shortlist produced with splitArchive. Falls back to getArchiveId
-	virtual archiveId getArchiveIdFromShortlist(const archiveKey key, const splitResult* resultsIn, const uint32_t numResults) const { return getArchiveId(key); }
 	
 	// Returns a name of an archive
 	virtual void getArchiveFilename(const archiveId id, char* nameOut, uint32_t& lenOut, const uint32_t maxLen) const {
@@ -98,9 +136,28 @@ public:
 	// Returns the number of archives in this dictionary
 	virtual uint32_t getNumArchives() const { uint32_t numArchivesOut = 0; return extractArchiveIds(NULL, numArchivesOut, 0); }
 	
+// Optimistations
+// Depending on how this dictioanry stores data you can implement these functions to speed up lookup
+	// Returns if the specified key maps onto the archive. You can optimise this in subclasses
+	virtual bool archiveContains(const archiveId aid, const archiveKey key) const { return getArchiveId(key).value == aid.value; }
+	
+	// Fast lookup of archives from a shortlist produced with splitArchive. Falls back to getArchiveId
+	virtual archiveId getArchiveIdFromShortlist(const archiveKey key, const splitResult* resultsIn, const uint32_t numResults) const { return getArchiveId(key); }
+	
+	// If you have implemented archiveContains, and it is faster than just "return getArchiveId(key) == aid;"
+	// you can use this as getArchiveIdFromShortlist
+	archiveId getArchiveIdFromShortlist_worker(const archiveKey key, const splitResult* resultsIn, const uint32_t numResults) const {
+		for (uint32_t i = 0; i < numResults; ++i) {
+			if (archiveContains(resultsIn[i].aid, key))
+				return resultsIn[i].aid;
+			}
+		return { 0 };
+		}
+	
 	// Returns a number greater than the number of archives in this dictionary. Use this to create buffers large enough to store the output of extractArchiveIds()
 	virtual uint32_t getArchiveCountUpperBound() const { return getNumArchives(); }
-	
+
+// Serialisation
 	// Serialises this dictionary for disc storage
 	virtual STTSAV_STRING encodeDictionary() const = 0;
 	
@@ -110,16 +167,14 @@ public:
 	// printf's to stdout this dictonary
 	virtual void dbgDump() const {}
 	};
+	
 
 struct transactionMode {
 	constexpr static uint8_t TM_UNKOWN = 0;
 	constexpr static uint8_t TM_LOAD = 1;
 	constexpr static uint8_t TM_SAVE = 2;
 	constexpr static uint8_t TM_DELETE  = 3;
-	constexpr static uint8_t TM_COMPACT = 4;
-	constexpr static uint8_t TM_SPLIT = 5;
-	constexpr static uint8_t TM_JOIN  = 6;
-	constexpr static uint8_t TM_count  = 7;
+	constexpr static uint8_t TM_count  = 4;
 	};
 } // namespace sttSav
 #end
@@ -195,27 +250,6 @@ struct transaction {
 		r.mKey = _mKey;
 		r.mRecord = _mRecord;
 		r.mode = transactionMode::TM_DELETE;
-		return r;
-		}
-	inline static transaction makeCompact(const archiveKey _mKey, const bool forceCompact) {
-		transaction r; r.initToZero();
-		r.mKey = _mKey;
-		r.mode = transactionMode::TM_COMPACT;
-		r.forceOperation = forceCompact;
-		return r;
-		}
-	inline static transaction makeSplit(const archiveKey _mKey, const bool forceSplit) {
-		transaction r; r.initToZero();
-		r.mKey = _mKey;
-		r.mode = transactionMode::TM_SPLIT;
-		r.forceOperation = forceSplit;
-		return r;
-		}
-	inline static transaction makeJoin(const archiveKey _mKey, const bool forceJoin) {
-		transaction r; r.initToZero();
-		r.mKey = _mKey;
-		r.mode = transactionMode::TM_JOIN;
-		r.forceOperation = forceJoin;
 		return r;
 		}
 	};

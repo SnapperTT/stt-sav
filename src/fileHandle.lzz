@@ -214,35 +214,19 @@ public:
 #endif
 		}
 	
-	
-	static bool copyRange_worker(FileHandle& src, const uint64_t srcOffset, const uint32_t len, FileHandle& dst, char* workingBuff) {
-		// workingBuff must be big enough to hold
-		if (!src.read(workingBuff, len))
+	static bool copyRange(FileHandle& src, const uint64_t srcOffset, const uint32_t len, FileHandle& dst) {
+		// Copies a block from src to dst, appending dst
+		constexpr uint32_t BUFFER_SIZE = 64 * 1024;
+		tmpArr<char,BUFFER_SIZE> buff_mem(len);
+		char* buff = buff_mem.getBuffer();
+		
+		if (!src.read(buff, len))
 			return false;
-		if (!dst.write(workingBuff, len))
+		if (!dst.write(buff, len))
 			return false;
 		if (!src.seek(srcOffset))
 			return false;
 		return true;
-		}
-	
-	static bool copyRange(FileHandle& src, const uint64_t srcOffset, const uint32_t len, FileHandle& dst) {
-		// Copies a block from src to dst, appending dst
-		constexpr uint32_t BUFFER_SIZE = 64 * 1024;
-		char buff_mem[BUFFER_SIZE];
-		char* buff = &buff_mem[0];
-		
-		bool hasAlloced = false;
-		if (len+1 >= BUFFER_SIZE) {
-			buff = STTSAV_NEW_ARR(char, len+1);
-			hasAlloced = true;
-			}
-		
-		bool r = copyRange_worker(src, srcOffset, len, dst, buff);
-		
-		if (hasAlloced)
-			STTSAV_DEL_ARR(buff, BUFFER_SIZE+1);
-		return r;
 		}
 	};
 	

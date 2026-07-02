@@ -164,6 +164,14 @@ public:
 		return mLookup.getArchiveId(key, const_cast<node*>(&root));
 		}
 		
+	bool archiveContains(const archiveId aid, const archiveKey key) const {
+		return mLookup.archiveContains(aid, key);
+		}
+		
+	archiveId getArchiveIdFromShortlist(const archiveKey key, const splitResult* resultsIn, const uint32_t numResults) const {
+		return getArchiveIdFromShortlist_worker(key, resultsIn, numResults);
+		}
+		
 	uint32_t extractArchiveIds(archiveId* archivesOut, uint32_t& numArchivesOut, const uint32_t maxArchivesOut) const {
 		uint32_t workingCount = 0;
 		mLookup.extractArchiveIdsWorker(workingCount, archivesOut, numArchivesOut, maxArchivesOut);

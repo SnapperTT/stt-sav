@@ -9,6 +9,7 @@ public:
 	uint32_t maxArchiveSize; // bigger than this? split!
 	uint32_t minimumArchiveSize; // all archives smaller than this?
 protected:
+	uint32_t incrementalMaintenanceCounter;
 	bool keepFilesOpen;
 
 public:
@@ -20,6 +21,7 @@ public:
 		compactionRatio = 1.5;
 		maxArchiveSize = 8388608; // 8MB
 		minimumArchiveSize = 1048576; // 1MB
+		incrementalMaintenanceCounter = 0;
 		keepFilesOpen = false;
 		}
 	
@@ -58,6 +60,13 @@ public:
 		a->fileExists = FileOps::exists(a->filename.c_str());
 		return a;
 		}
+		
+	
+	ArchiveFile* getLazy(const archiveId aid) {
+		if (aid.value > mArchives.size())
+			return NULL;
+		return mArchives[aid.value - 1];
+		}
 	
 	void initArchiveFilesFromDictionary() {
 		// Delete any existing ArchiveFile handles
@@ -77,7 +86,8 @@ public:
 		for (uint32_t i = 0; i < numArchives; ++i)
 			getOrCreate(ids[i]);
 		}
-	
+
+protected:	
 	void applyArchiveDelta(const archiveId* oldIds, const uint32_t numOld, const archiveId* newIds, const uint32_t numNew) {
 		// What we do is we have a list of destinations. We write all the records from the oldIds to the destArchives,
 		// then destructively merge the destArchives into mArchives 
@@ -160,8 +170,96 @@ public:
 		//
 		// Every record must end up in exactly one destination archive.
 		// =========================================================================
+		
+		// Build a temporary splitResult array for fast dictionary lookups.
+		tmpArr<splitResult, 32> storage(numNew);
+		splitResult* shortlist = storage.getBuffer();
+		
+		for (uint32_t i = 0; i < numNew; ++i)
+			shortlist[i].aid = destArchives[i].aid;
+	
+		// Phase 3 - Migrate records.
+		for (uint32_t oldIdx = 0; oldIdx < numOld; ++oldIdx) {
+			const archiveId srcAid = oldIds[oldIdx];
+			if (!srcAid.value || srcAid.value > mArchives.size())
+				continue;
+			ArchiveFile* src = mArchives[srcAid.value - 1];
+			if (!src)
+				continue;
+			STTSAV_ASSERT(src->hasLoadedRecords);
 
-		// TODO
+			// Build dead-record table lazily.
+			STTSAV_VECTOR<bool> dead;
+
+			auto isDead = [&](const uint32_t recordIdx) -> bool {
+				if (dead.empty()) {
+					if (src->pendingRecords.empty())
+						return false;
+						
+					dead.resize(src->records.size(), false);
+					for (const recordInfo& p : src->pendingRecords) {
+						uint32_t idx = src->findRecord(p.record);
+						if (idx < src->records.size())
+							dead[idx] = true;
+						}
+					}
+				return dead[recordIdx];
+				};
+
+			// Pass 1 - committed records.
+			for (uint32_t i = 0; i < src->records.size(); ++i) {
+				if (isDead(i))
+					continue;
+
+				const recordInfo& r = src->records[i];
+				ArchiveFile* dst = NULL;
+				
+				archiveId dstAid = mDictionary->getArchiveIdFromShortlist( r.key, shortlist, numNew );
+				for (DestinationArchive& d : destArchives) {
+					if (d.aid == dstAid) {
+						dst = d.archive;
+						break;
+						}
+					}
+
+				STTSAV_ASSERT(dst);
+				
+				STTSAV_STRING buff;
+				src->readRecord(r.record, buff);
+				dst->writeRecord(r.key, r.record, buffer(buff.data(), buff.size()));
+				}
+
+			// Pass 2 - pending records.
+			for (uint32_t i = 0; i < src->pendingRecords.size(); ++i) {
+				const recordInfo& r = src->pendingRecords[i];
+
+				// Is this pending write superseded by a later operation?
+				bool survives = (r.length != 0);
+
+				if (survives) {
+					for (uint32_t j = i + 1; j < src->pendingRecords.size(); ++j) {
+						if (src->pendingRecords[j].record.value != r.record.value)
+							continue;
+						survives = (src->pendingRecords[j].length != 0);
+						}
+					}
+
+				if (!survives)
+					continue;
+
+				ArchiveFile* dst = NULL;
+				archiveId dstAid = mDictionary->getArchiveIdFromShortlist( r.key, shortlist, numNew );
+				for (DestinationArchive& d : destArchives) {
+					if (d.aid == dstAid) {
+						dst = d.archive;
+						break;
+						}
+					}
+
+				STTSAV_ASSERT(dst);
+				dst->writeRecord(r.key, r.record, buffer(src->writeBuffer.data() + r.offset, r.length));
+				}
+			}
 
 		// Phase 4 - Commit destination archives.
 		for (DestinationArchive& d : destArchives) {
@@ -175,6 +273,9 @@ public:
 		for (DestinationArchive& d : destArchives) {
 			if (d.archive->file.isOpen())
 				d.archive->file.close();
+			
+			// We have completed compaction, so there are no wasted bytes
+			d.archive->wastedBytes = 0;
 			}
 
 		// Phase 5 - Replace surviving archives.
@@ -233,7 +334,8 @@ public:
 			mArchives[d.aid.value - 1] = d.archive;
 			}
 		}
-	
+
+public:
 	// Api for single transactions
 	bool loadRecord(const archiveKey key, const recordId record, STTSAV_STRING& out) {
 		transaction t = transaction::makeLoad(key, record, out);
@@ -253,53 +355,59 @@ public:
 		doTransactions(&t, 1);
 		return t.success;
 		}
-	bool compactArchive(const archiveKey key, const bool forceCompact) {
-		transaction t = transaction::makeCompact(key, forceCompact);
-		doTransactions(&t, 1);
-		return t.success;
-		}
-	bool splitArchive(const archiveKey key, const bool forceSplit) {
-		transaction t = transaction::makeCompact(key, forceSplit);
-		doTransactions(&t, 1);
-		return t.success;
-		}
-	bool joinArchive(const archiveKey key, const bool forceJoin) {
-		transaction t = transaction::makeCompact(key, forceJoin);
-		doTransactions(&t, 1);
-		return t.success;
-		}
 	
 	void startBulkTransations() {
 		keepFilesOpen = true;
 		}
 	
 	void doTransactions(transaction* mTransactions, const int nTransactions) {
-		// transactionMode = normal, flush. 
-		//  - normal: writes to disc, and does splitting and compacting where appropriate
-		//	- flush: writes to disc but doesn't do splitting, compacting. Use on app save & exit
-		
-		// Bulk load/save/delete to save file ops
-		// first resolve mKey -> archiveId
-		//...
-		// determine if we need to split files, etc
-		//...
-		// perform transactions in non-conflicting order
-		//...
-		
+		// exectues the transaction
+		for (int i = 0; i < nTransactions; ++i) {
+			transaction& t = mTransactions[i];
+			t.success = false;
+
+			archiveId aid = mDictionary->getArchiveId(mTransactions[i].mKey);
+			if (!aid.value)
+				continue;
+			ArchiveFile* archive = getOrCreate(aid);
+			STTSAV_ASSERT(archive);
+			
+			sttSav::push_back_vector_unique(touchedArchives, std::move(archive));
+
+			switch (t.mode) {
+				case transactionMode::TM_LOAD:
+					t.success = archive->readRecord(t.mRecord, *t.stringOut);
+					break;
+				case transactionMode::TM_SAVE:
+					t.success = archive->writeRecord(t.mKey, t.mRecord, t.mBufferOut);
+					break;
+				case transactionMode::TM_DELETE:
+					t.success = archive->deleteRecord(t.mRecord);
+					break;
+				default:
+					STTSAV_ASSERT(false);
+					break;
+				}
+			}
+
 		if (!keepFilesOpen)
 			closeOpenFiles();
 		}
 	
 	void closeOpenFiles() {
+		// Commit modified archives.
+		uint32_t failedCommits = 0;
 		for (ArchiveFile* AF : touchedArchives) {
 			if (AF) {
-				AF->touchedThisTransaction = false;
+				if (!AF->commit())
+					failedCommits++;
 				if (!AF->file.isOpen())
 					continue;
 				AF->file.flush();
 				AF->file.close();
 				}
 			}
+		STTSAV_ASSERT(failedCommits == 0);
 		touchedArchives.clear();
 		}
 	
@@ -307,14 +415,164 @@ public:
 		// close any open files here
 		closeOpenFiles();
 		keepFilesOpen = false;
-		} 
+		}
 	
-	// For an archive file, we extract a list of records
-	void extractRecordsList(const archiveId id, STTSAV_VECTOR<recordInfo>& out) {}
+	uint32_t doMaintenance(const bool incremental, const bool aggressive) {
+		// Performs maintenance on the ArchiveFiles
+		// - splits oversized ArchiveFiles
+		// - merges undersized groups of ArchiveFiles
+		// - compacts (removes dead entries) from ArchiveFiles
+		// incremental = true  => return after writing one file
+		//               false => scan all ArchiveFiles, and 
+		// aggressive  = true  => compact any files that have *any* wasted bytes
+		//               false => scan all ArchiveFiles, and compact only files with
+		//                        compactionRatio < (wastedSpace+usedSpace)/usedSpace
+		uint32_t numModified = 0;
+			
+		// Phase 1 - Split oversized archives.
+		uint32_t numArchives = mArchives.size();
+		if (numArchives == 0)
+			return 0;
+		
+		for (uint32_t i = 0; i < numArchives; ++i) {
+			uint32_t idx = i;
+			if (incremental)
+				idx = (incrementalMaintenanceCounter + i) % numArchives;
+			ArchiveFile* af = mArchives[idx];
+	
+			if (!af)
+				continue;
+			if (!af->hasLoadedRecords && !af->loadRecords())
+				continue;
+			if (af->pendingRecords.size())
+				af->commit();
+			if (af->fileLength <= maxArchiveSize + af->wastedBytes)
+				continue;
 
-	// Writes the dictionary to file
-	bool writeDictionary() { return false; }
-	bool readDictionary() { return false; }
+			tmpArr<splitResult, 512> resultsStorage(mDictionary->getArchiveCountUpperBound());
+			splitResult* results = resultsStorage.getBuffer();
+
+			uint32_t numResults = 0;
+
+			if (!mDictionary->splitArchive(af->aid, af->records, maxArchiveSize, results, numResults, resultsStorage.size()))
+				continue;
+
+			tmpArr<archiveId, 512> newIdsStorage(numResults);
+			archiveId* newIds = newIdsStorage.getBuffer();
+
+			for (uint32_t i = 0; i < numResults; ++i)
+				newIds[i] = results[i].aid;
+
+			archiveId oldId = af->aid;
+			applyArchiveDelta(&oldId, 1, newIds, numResults);
+
+			++numModified;
+
+			if (incremental) {
+				incrementalMaintenanceCounter = (idx + 1) % numArchives;
+				return numModified;
+				}
+				
+			numArchives = mArchives.size();
+			i = 0;
+			}
+
+		// Phase 2 - Merge undersized archives.
+		for (uint32_t i = 0; i < numArchives; ++i) {
+			uint32_t idx = i;
+			if (incremental)
+				idx = (incrementalMaintenanceCounter + i) % numArchives;
+			ArchiveFile* af = mArchives[idx];
+	
+			if (!af)
+				continue;
+			if (!af->hasLoadedRecords && !af->loadRecords())
+				continue;
+			if (af->pendingRecords.size())
+				af->commit();
+			if (af->fileLength >= minimumArchiveSize)
+				continue;
+
+			tmpArr<archiveId, 512> mergeStorage(512);
+			archiveId* mergeIds = mergeStorage.getBuffer();
+
+			uint32_t numMerge = 0;
+
+			if (!mDictionary->getMergeCandidates(af->aid, mergeIds, numMerge, mergeStorage.size()))
+				continue;
+			
+			uint64_t totalSize = 0;
+			uint64_t totalWaste = 0;
+			
+			uint32_t numToMerge = 0;
+			for (uint32_t i = 0; i < numMerge; ++i) {
+				ArchiveFile* af2 = getLazy(mergeIds[i]);
+				if (!af2) continue; // archive DNE
+				if (!af2->hasLoadedRecords && !af2->loadRecords())
+					continue;
+				totalSize += af2->fileLength + af2->writeBuffer.size();
+				totalWaste += af2->wastedBytes;
+				numToMerge++;
+				}
+				
+			if (numToMerge < 2)
+				continue;
+			if (totalSize > minimumArchiveSize + totalWaste)
+				continue;
+
+			if (!mDictionary->mergeArchives(mergeIds, numMerge))
+				continue;
+
+			archiveId survivor = mergeIds[0];
+			applyArchiveDelta(mergeIds, numMerge, &survivor, 1);
+
+			++numModified;
+
+			if (incremental) {
+				incrementalMaintenanceCounter = (idx + 1) % numArchives;
+				return numModified;
+				}
+				
+			numArchives = mArchives.size();
+			i = 0;
+			}
+
+		// Phase 3 - Compact fragmented archives.
+		for (uint32_t i = 0; i < numArchives; ++i) {
+			uint32_t idx = i;
+			if (incremental)
+				idx = (incrementalMaintenanceCounter + i) % numArchives;
+			ArchiveFile* af = mArchives[idx];
+	
+			if (!af)
+				continue;
+			if (af->wastedBytes == 0)
+				continue;
+
+			if (!aggressive) {
+				const uint64_t liveBytes = (af->fileLength > af->wastedBytes) ? (af->fileLength - af->wastedBytes) : 0;
+				if (liveBytes == 0)
+					continue;
+				if (double(af->wastedBytes) / double(liveBytes) <= compactionRatio)
+					continue;
+				}
+
+			archiveId id = af->aid;
+			applyArchiveDelta(&id, 1, &id, 1);
+			++numModified;
+
+			if (incremental) {
+				incrementalMaintenanceCounter = (idx + 1) % numArchives;
+				return numModified;
+				}
+			}
+		
+		if (incremental && numArchives)
+			incrementalMaintenanceCounter = (incrementalMaintenanceCounter + 1) % numArchives;
+		
+		return numModified;
+		}
+	
 	};
 
 } // namespace sttSav

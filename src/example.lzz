@@ -14,6 +14,8 @@
 #include "planetaryFaceUVArchiveDictionary.h"
 #include "XYArchiveDictionary.h"
 
+#include <map>
+
 // Helper functions
 namespace sttSav {
 void testSplitting(ArchiveDictionaryI& dic, const archiveId aid, STTSAV_VECTOR<recordInfo>& records) {
@@ -247,7 +249,144 @@ int main (int argc, char ** argv) {
 			printf("xydic.root: %s\n", v.toDbgString().c_str());
 		}
 	}
-	
+
+	if (1) {
+		// Test Archive Manager
+		// We make a "fake" voxel game. We distribute chunks around spawn
+		// of varying size. We generate random data, then save to disc
+		// we then load and compare
+
+		struct ChunkCoord {
+			int32_t x;
+			int32_t y;
+
+			inline bool operator<(const ChunkCoord& o) const {
+				if (x != o.x) return x < o.x;
+				return y < o.y;
+				}
+			};
+
+		struct ChunkData {
+			recordId rid;
+			STTSAV_STRING blob;
+			};
+
+		srand(1);
+
+		system("rm -rf archive-test");
+		system("mkdir archive-test");
+
+		XYArchiveDictionary dict;
+		ArchiveManager mgr(&dict);
+
+		mgr.mBasePath = "archive-test";
+		mgr.maxArchiveSize = 64 * 1024;
+		mgr.minimumArchiveSize = 8 * 1024;
+		mgr.compactionRatio = 0.5f;
+
+		std::map<ChunkCoord, ChunkData> truth;
+
+		recordId nextRid = {1};
+
+		// Generate world.
+		auto makeBlob = []() {
+			STTSAV_STRING s;
+			uint32_t sz = 100 + rand() % 1901;
+			s.resize(sz);
+
+			for (uint32_t i = 0; i < sz; ++i)
+				s[i] = rand() & 0xff;
+
+			return s;
+			};
+
+		auto insertChunk = [&](int x, int y) {
+			ChunkCoord c = {x, y};
+			if (truth.count(c))
+				return;
+
+			ChunkData d;
+			d.rid = nextRid;
+			nextRid.value++;
+			d.blob = makeBlob();
+			truth[c] = d;
+			};
+
+		for (int i = 0; i < 5000; ++i)
+			insertChunk(rand() % 64, rand() % 64);
+
+		for (int i = 0; i < 5000; ++i)
+			insertChunk(rand() % 256, rand() % 256);
+
+		// Initial save.
+		for (auto& it : truth) {
+			archiveKey key = dict.buildKey(it.first.x, it.first.y);
+			mgr.saveRecord(key, it.second.rid, it.second.blob.data(), it.second.blob.size());
+			}
+
+		while (mgr.doMaintenance(false, false));
+
+		// Verify.
+		for (auto& it : truth) {
+			archiveKey key = dict.buildKey(it.first.x, it.first.y);
+			STTSAV_STRING blob;
+
+			STTSAV_ASSERT(mgr.loadRecord(key,it.second.rid,blob));
+			STTSAV_ASSERT(blob.size() == it.second.blob.size());
+			STTSAV_ASSERT(memcmp(blob.data(),it.second.blob.data(),blob.size()) == 0);
+			}
+
+		// Mutate.
+		for (int iter = 0; iter < 10000; ++iter) {
+			int op = rand() % 100;
+
+			if (truth.empty())
+				op = 99;
+
+			if (op < 60) {
+				auto it = truth.begin();
+				std::advance(it, rand() % truth.size());
+
+				it->second.blob = makeBlob();
+
+				archiveKey key = dict.buildKey(it->first.x, it->first.y);
+				mgr.saveRecord( key, it->second.rid, it->second.blob.data(), it->second.blob.size());
+				}
+			else if (op < 80) {
+				auto it = truth.begin();
+				std::advance(it, rand() % truth.size());
+
+				archiveKey key = dict.buildKey(it->first.x, it->first.y);
+				mgr.deleteRecord(key, it->second.rid);
+
+				truth.erase(it);
+				}
+			else {
+				insertChunk(rand() % 256, rand() % 256);
+				auto it = truth.end();
+				--it;
+				archiveKey key = dict.buildKey(it->first.x, it->first.y);
+				mgr.saveRecord( key, it->second.rid, it->second.blob.data(), (uint32_t)it->second.blob.size());
+				}
+
+			if ((iter % 50) == 0)
+				mgr.doMaintenance(true, false);
+			}
+
+		while (mgr.doMaintenance(false, false));
+
+		// Final verify.
+		for (auto& it : truth) {
+			archiveKey key = dict.buildKey(it.first.x, it.first.y);
+			STTSAV_STRING blob;
+			STTSAV_ASSERT(mgr.loadRecord( key, it.second.rid, blob));
+			STTSAV_ASSERT(blob.size() == it.second.blob.size());
+			STTSAV_ASSERT(memcmp( blob.data(), it.second.blob.data(), blob.size()) == 0);
+			}
+
+		printf( "ArchiveManager test passed (%zu chunks)\n", truth.size());
+		}
+
 	printf("Exiting example...\n");
 	return 0;
 	}
