@@ -5,9 +5,12 @@ USE_STTR=
 
 LAZY=../../lzz-bin/lzz -hx hh
 # Files are combined into single header
-RAWSOURCES=example.lzz sttSav.lzz fileHandle.lzz splitBucket.lzz dictionaryLookup.lzz stringEncoder.lzz binaryValueWriter.lzz XYArchiveDictionary.lzz planetaryFaceUVArchiveDictionary.lzz archiveFile.lzz archiveManager.lzz 
+RAWSOURCES=example.lzz sttSav.lzz fileHandle.lzz splitBucket.lzz stringEncoder.lzz binaryValueWriter.lzz  dictionaryLookup.lzz XYArchiveDictionary.lzz planetaryFaceUVArchiveDictionary.lzz archiveFile.lzz archiveManager.lzz 
 SINGLEHEADER_SRC=sttSav.h2 fileHandle.h2 splitBucket.h2 dictionaryLookup.h2 stringEncoder.h2 binaryValueWriter.h2 archiveFile.h2 archiveManager.h2 
 SINGLEHEADER_OUT=stt-sav.h
+# binary serialisation module
+BINVAL_SRC=stringEncoder.h2 binaryValueWriter.h2 
+BINVAL_OUT=binaryValueWriter.h
 # Pages optional sub-module
 PAGES_SRC=planetaryFaceUVArchiveDictionary.h2
 PAGES_OUT=planetaryFaceUVArchiveDictionary.h
@@ -31,6 +34,7 @@ SFI=$(addprefix $(OUTPUTDIR), $(RAWSOURCES:.lzz=.h))
 OSINGLEHEADER_OUT=$(OUTPUTDIR)$(SINGLEHEADER_OUT)
 OPAGES_OUT=$(OUTPUTDIR)$(PAGES_OUT)
 OXY_OUT=$(OUTPUTDIR)$(XY_OUT)
+OBINVAL_OUT=$(OUTPUTDIR)$(BINVAL_OUT)
 OEXTRAHEADER_OUT=$(addprefix $(OUTPUTDIR), $(EXTRAHEADER_H:.h2=.h)) $(addprefix $(OUTPUTDIR), $(EXTRAHEADER_CPP:.h2=.cpp))
 
 ########################################################################
@@ -41,7 +45,7 @@ all:
 #	$(MAKE) sttr
 
 .PHONY: all_base
-all_base: $(OSINGLEHEADER_OUT) $(OEXTRAHEADER_OUT) $(OPAGES_OUT) $(OXY_OUT) $(OUTPUTDIR)
+all_base: $(OSINGLEHEADER_OUT) $(OEXTRAHEADER_OUT) $(OPAGES_OUT) $(OXY_OUT) $(OBINVAL_OUT) $(OUTPUTDIR)
 	@echo Done
 
 .PHONY: sttr
@@ -75,6 +79,9 @@ $(OPAGES_OUT): $(addprefix $(TEMPDIR), $(PAGES_SRC)) $(OUTPUTDIR)
 	
 $(OXY_OUT): $(addprefix $(TEMPDIR), $(XY_SRC)) $(OUTPUTDIR)
 	cat $(addprefix $(TEMPDIR), $(XY_SRC)) > $(OXY_OUT)
+
+$(OBINVAL_OUT): $(addprefix $(TEMPDIR), $(BINVAL_SRC)) $(OUTPUTDIR)
+	cat $(addprefix $(TEMPDIR), $(BINVAL_SRC)) > $(OBINVAL_OUT)
 
 $(OUTPUTDIR)%.h: $(TEMPDIR)%.h2 $(OUTPUTDIR)
 	mv -f $< $@

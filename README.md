@@ -62,6 +62,7 @@ Archive files are written in append only to help ensure data integrity in case o
 
 sttSav also provides json style binary serialisation 
 
+`#include "binaryValueWriter.h"`
 * `StringEncoder`/`StringDecoder` serialises binary values and strings to or fram a string
 * `BinaryWriter`/`BinaryValue` serialises binary data in a key => value JSON style format. The api has been made to be parallel to [rapidJson](https://rapidjson.org/), so you can easily write wrappers that encode JSON or sttSaveBinary records.
 
