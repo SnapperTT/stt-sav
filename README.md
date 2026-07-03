@@ -120,23 +120,22 @@ Archives are writen in append only. This is to make the archive files resistant 
 
 Archive files should also be split if they get too big and merged if they are too small.
 
-You *must* call the function `doMaintenance` periodocially
-
-```
-doMaintenance(const bool incremental, const bool aggressive);
-```
+You *must* call the function `doMaintenance` periodocially. 
 
 This function performs maintenance on the ArchiveFiles
 - splits oversized ArchiveFiles
 - merges undersized groups of ArchiveFiles
 - compacts (removes dead entries) from ArchiveFiles
 
-incremental = true  => return after writing one file
-              false => scan all ArchiveFiles, and 
-aggressive  = true  => compact any files that have *any* wasted bytes
-              false => scan all ArchiveFiles, and compact only files with
-                        compactionRatio < (wastedSpace+usedSpace)/usedSpace
+```
+doMaintenance(const bool incremental, const bool aggressive);
 
+//incremental = true  => return after writing one file
+//              false => scan all ArchiveFiles, and 
+//aggressive  = true  => compact any files that have *any* wasted bytes
+//              false => scan all ArchiveFiles, and compact only files with
+//                       compactionRatio < (wastedSpace+usedSpace)/usedSpace
+```
 
 ArchiveManager has the following parameters you can tweak:
 
