@@ -78,7 +78,7 @@ public:
 	// helpers
 	// Record lookup
 	uint32_t findRecord(const recordId id) const {
-		// If this fails to compile be sure to #include <algorithm>
+		// If this fails to compile be sure to #include <algorithm>				
 		auto it = std::lower_bound(records.begin(), records.end(), id, recordInfo::compareRecords());
 		if (it == records.end() || it->record.value != id.value)
 			return -1;
@@ -112,6 +112,9 @@ public:
 	bool readRecord(const recordId id, STTSAV_STRING& recordOut) {
 		STTSAV_ASSERT(hasLoadedRecords);
 		recordOut.clear();
+		
+		//if (id.value == 1136) // canary testing
+		//	printf("READ RECORD 1136\n");
 
 		// Check pending changes first (newest first).
 		uint32_t p = findPendingRecord(id, false);
@@ -150,6 +153,9 @@ public:
 		
 	bool writeRecord(const archiveKey key, const recordId id, const buffer buff) {
 		STTSAV_ASSERT(hasLoadedRecords);
+		
+		//if (id.value == 1136) // canary testing
+		//	printf("WRITE RECORD 1136\n");
 
 		// Remove any existing pending commits
 		uint32_t p = findPendingRecord(id);
@@ -167,6 +173,9 @@ public:
 	bool deleteRecord(const recordId id) {
 		STTSAV_ASSERT(hasLoadedRecords);
 
+		//if (id.value == 1136) // canary testing
+		//	printf("DELETE RECORD 1136\n");
+			
 		// Remove any pending entry
 		uint32_t p = findPendingRecord(id);
 		while (p < pendingRecords.size()) {
@@ -187,12 +196,17 @@ public:
 		}
 		
 	bool loadRecords() {
+		prepareFileForReading();
 		return loadRecordsWorker();
 		}
 		
 	bool loadRecordsWorker() {
 		// Returns TRUE if archive is ok or truncated and we can recover feilds
 		// Returns FALSE if archive is corrupt and unusable
+		if (!fileExists) {
+			hasLoadedRecords = true;
+			return true;
+			}
 		STTSAV_ASSERT(file.isOpen());
 		fileLength = file.length();
 
@@ -287,6 +301,29 @@ public:
 		fileLength = sizeof(ArchiveFileHeader);
 		}
 	
+	bool prepareFileForReading() {
+		if (file.isOpen())
+			return true;
+		if (!fileExists) {
+			hasLoadedRecords = true;
+			return true;
+			}
+		if (!file.openRead(filename.c_str()))
+			return false;
+		if (!hasLoadedRecords)
+			loadRecords();
+		return true;
+		}
+		
+	bool prepareFileForRecordDeletion() {
+		if (!fileExists) {
+			hasLoadedRecords = true;
+			return true;
+			}
+		return prepareFileForWriting();
+		}
+	
+	
 	bool prepareFileForWriting() {
 		// Already open for read/write?
 		if (file.isOpen() && file.getMode() == FileHandle::OM_READ_WRITE)
@@ -326,6 +363,8 @@ public:
 protected:
 	void applyDeltas(const STTSAV_VECTOR<recordInfo>& deltas, const bool updateWastedBytes) {
 		for (const recordInfo& r : deltas) {
+			//if (r.record.value == 1136) // canary testing
+			//	printf("APPLY DELTA 1136\n");
 			uint32_t idx = findRecord(r.record);
 			if (r.length == 0) {
 				// Delete existing record.

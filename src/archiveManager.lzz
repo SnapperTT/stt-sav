@@ -14,7 +14,7 @@ protected:
 
 public:
 	STTSAV_VECTOR<ArchiveFile*> mArchives; // archiveId.value - 1 == index of this array
-	STTSAV_VECTOR<ArchiveFile*> touchedArchives; // what archives have been processed in the current batch?
+	STTSAV_VECTOR<archiveId> touchedArchives; // what archives have been processed in the current batch?
 
 	ArchiveManager(ArchiveDictionaryI* _mDictionary) {
 		mDictionary = _mDictionary;
@@ -94,21 +94,19 @@ protected:
 		struct DestinationArchive {
 			archiveId aid;
 			ArchiveFile* archive;
-			bool isSurvivor;
+			bool isSameAsASource; // true => there is an identical source file to this destination file
 			};
 		STTSAV_VECTOR<DestinationArchive> destArchives;
+		STTSAV_VECTOR<ArchiveFile*> deletionList;
 
 		// Phase 1 - Ensure all source archives are realised.
 		for (uint32_t i = 0; i < numOld; ++i) {
 			const archiveId aid = oldIds[i];
-
 			if (!aid.value || aid.value > mArchives.size())
 				continue;
-
 			ArchiveFile* src = mArchives[aid.value - 1];
 			if (!src)
 				continue;
-
 			if (!src->hasLoadedRecords) {
 				if (!src->loadRecords())
 					STTSAV_ASSERT(false);
@@ -122,10 +120,26 @@ protected:
 		for (uint32_t i = 0; i < numNew; ++i) {
 			const archiveId aid = newIds[i];
 
-			bool survives = false;
+			bool isSameAsASource = false;
+			
+			char filename[512];
+			uint32_t len = 0;
+			mDictionary->getArchiveFilename(aid, filename, len, sizeof(filename));
+			STTSAV_STRING newFilename = FileOps::joinPath(mBasePath, filename);
+				
 			for (uint32_t j = 0; j < numOld; ++j) {
 				if (oldIds[j].value == aid.value) {
-					survives = true;
+					// Matching ids. Check the filenames to see if the physical file survives
+					// (file names may be different after 					
+					ArchiveFile* oldArchive = getLazy(aid);
+					if (oldArchive) {
+						#ifdef STTSAV_DBG  
+						//printf("test does archive %i survive: %s -> %s (%d)\n", (int)aid.value, newFilename.c_str(), oldArchive->filename.c_str(), (oldArchive->filename == newFilename));
+						#endif
+						isSameAsASource = (oldArchive->filename == newFilename);
+						if (!isSameAsASource)
+							push_back_vector_unique(deletionList, oldArchive);
+						}
 					break;
 					}
 				}
@@ -133,14 +147,9 @@ protected:
 			ArchiveFile* dst = STTSAV_NEW(ArchiveFile);
 
 			dst->aid = aid;
+			dst->filename = newFilename;
 
-			char filename[512];
-			uint32_t len = 0;
-			mDictionary->getArchiveFilename(aid, filename, len, sizeof(filename));
-
-			dst->filename = FileOps::joinPath(mBasePath, filename);
-
-			if (survives)
+			if (isSameAsASource)
 				dst->filename += ".tmp";
 
 			dst->fileExists = false;
@@ -148,9 +157,31 @@ protected:
 			DestinationArchive da;
 			da.aid = aid;
 			da.archive = dst;
-			da.isSurvivor = survives;
+			da.isSameAsASource = isSameAsASource;
 
 			destArchives.push_back(da);
+			}
+		// source files that do not map onto any destination files are marked for deletion
+		for (uint32_t i = 0; i < numOld; ++i) {
+			const archiveId aid = oldIds[i];
+
+			bool survives = false;
+			for (uint32_t j = 0; j < numNew; ++j) {
+				if (newIds[j].value == aid.value) {
+					survives = true;
+					break;
+					}
+				}
+			if (!survives)
+			push_back_vector_unique(deletionList, getLazy(aid));
+			}
+			
+		for (uint32_t i = 0; i < numOld; ++i) {
+			const archiveId aid = oldIds[i];
+			if (!aid.value || aid.value > mArchives.size())
+				continue;
+			ArchiveFile* src = mArchives[aid.value - 1];
+			src->prepareFileForReading();
 			}
 
 		// =========================================================================
@@ -226,6 +257,7 @@ protected:
 				
 				STTSAV_STRING buff;
 				src->readRecord(r.record, buff);
+				dst->prepareFileForWriting();
 				dst->writeRecord(r.key, r.record, buffer(buff.data(), buff.size()));
 				}
 
@@ -280,7 +312,7 @@ protected:
 
 		// Phase 5 - Replace surviving archives.
 		for (DestinationArchive& d : destArchives) {
-			if (!d.isSurvivor)
+			if (!d.isSameAsASource)
 				continue;
 
 			STTSAV_STRING finalName = d.archive->filename;
@@ -293,34 +325,21 @@ protected:
 			}
 
 		// Phase 6 - Remove obsolete source archives.
-		for (uint32_t i = 0; i < numOld; ++i) {
-			const archiveId aid = oldIds[i];
-
-			bool survives = false;
-			for (uint32_t j = 0; j < numNew; ++j) {
-				if (newIds[j].value == aid.value) {
-					survives = true;
-					break;
-					}
-				}
-
-			if (survives)
-				continue;
-			
-			if (!aid.value || aid.value > mArchives.size())
-				continue;
-			
-			ArchiveFile* src = mArchives[aid.value - 1];
+		for (ArchiveFile* src : deletionList) {
 			if (!src)
 				continue;
-
+				
 			if (src->file.isOpen())
 				src->file.close();
+				
+			#ifdef STTSAV_DBG
+			//printf("DELETE %s\n", src->filename.c_str());
+			#endif
 
 			FileOps::deleteFile(src->filename.c_str());
 
 			STTSAV_DEL(src, sizeof(ArchiveFile));
-			mArchives[aid.value - 1] = NULL;
+			mArchives[src->aid.value - 1] = NULL;
 			}
 
 		// Phase 7 - merge our mArchive vectors
@@ -342,6 +361,9 @@ public:
 		doTransactions(&t, 1);
 		return t.success;
 		}
+	bool saveRecord(const archiveKey key, const recordId record, const STTSAV_STRING& str) {
+		return saveRecord(key, record, buffer(str.data(), str.size()));
+		}
 	bool saveRecord(const archiveKey key, const recordId record, const char* buff, const uint32_t len) {
 		return saveRecord(key, record, buffer(buff, len));
 		}
@@ -362,9 +384,13 @@ public:
 	
 	void doTransactions(transaction* mTransactions, const int nTransactions) {
 		// exectues the transaction
+		STTSAV_ASSERT(mDictionary->isInitialised);
 		for (int i = 0; i < nTransactions; ++i) {
 			transaction& t = mTransactions[i];
 			t.success = false;
+			
+			//if (t.mRecord.value == 1136)  // canary testing
+			//	printf("TRANSACTION 1136 mode=%u\n", t.mode);
 
 			archiveId aid = mDictionary->getArchiveId(mTransactions[i].mKey);
 			if (!aid.value)
@@ -372,16 +398,19 @@ public:
 			ArchiveFile* archive = getOrCreate(aid);
 			STTSAV_ASSERT(archive);
 			
-			sttSav::push_back_vector_unique(touchedArchives, std::move(archive));
+			sttSav::push_back_vector_unique(touchedArchives, aid);
 
 			switch (t.mode) {
 				case transactionMode::TM_LOAD:
+					archive->prepareFileForReading();
 					t.success = archive->readRecord(t.mRecord, *t.stringOut);
 					break;
 				case transactionMode::TM_SAVE:
+					archive->prepareFileForWriting();
 					t.success = archive->writeRecord(t.mKey, t.mRecord, t.mBufferOut);
 					break;
 				case transactionMode::TM_DELETE:
+					archive->prepareFileForRecordDeletion();
 					t.success = archive->deleteRecord(t.mRecord);
 					break;
 				default:
@@ -397,7 +426,8 @@ public:
 	void closeOpenFiles() {
 		// Commit modified archives.
 		uint32_t failedCommits = 0;
-		for (ArchiveFile* AF : touchedArchives) {
+		for (archiveId aid : touchedArchives) {
+			ArchiveFile* AF = getLazy(aid);
 			if (AF) {
 				if (!AF->commit())
 					failedCommits++;
@@ -427,7 +457,17 @@ public:
 		// aggressive  = true  => compact any files that have *any* wasted bytes
 		//               false => scan all ArchiveFiles, and compact only files with
 		//                        compactionRatio < (wastedSpace+usedSpace)/usedSpace
+		uint32_t r = doMaintenance_worker(incremental, aggressive);
+		endBulkTransations();
+		return r;
+		}
+		
+	uint32_t doMaintenance_worker(const bool incremental, const bool aggressive) {
 		uint32_t numModified = 0;
+		uint32_t totalScanned1 = 0;
+		uint32_t totalScanned2 = 0;
+		uint32_t totalScanned3 = 0;
+		const uint32_t maxToScan = incremental ? 20 : uint32_t(-1); // limit scans per incremental tick to prevent testing 10,000 archives a tick
 			
 		// Phase 1 - Split oversized archives.
 		uint32_t numArchives = mArchives.size();
@@ -438,27 +478,43 @@ public:
 			uint32_t idx = i;
 			if (incremental)
 				idx = (incrementalMaintenanceCounter + i) % numArchives;
-			ArchiveFile* af = mArchives[idx];
-	
+			totalScanned1++;
+			if (incremental && totalScanned1 > maxToScan)
+				break;
+			
+			ArchiveFile* af = mArchives[idx];	
+
 			if (!af)
 				continue;
 			if (!af->hasLoadedRecords && !af->loadRecords())
 				continue;
 			if (af->pendingRecords.size())
-				af->commit();
+				af->commit();	
+
+			#ifdef STTSAV_DBG
+				//char nBuff[512];
+				//uint32_t nLen = 0;
+				//mDictionary->getArchiveFilename(af->aid, nBuff, nLen, 512);
+				//printf("test %i -> %i/%i (%s)\n", (int)af->aid.value, (int)af->fileLength, (int)(maxArchiveSize + af->wastedBytes), nBuff);
+			#endif
+			
 			if (af->fileLength <= maxArchiveSize + af->wastedBytes)
 				continue;
 
-			tmpArr<splitResult, 512> resultsStorage(mDictionary->getArchiveCountUpperBound());
+			tmpArr<splitResult, 512> resultsStorage(512);
 			splitResult* results = resultsStorage.getBuffer();
 
 			uint32_t numResults = 0;
-
+			
 			if (!mDictionary->splitArchive(af->aid, af->records, maxArchiveSize, results, numResults, resultsStorage.size()))
 				continue;
 
 			tmpArr<archiveId, 512> newIdsStorage(numResults);
 			archiveId* newIds = newIdsStorage.getBuffer();
+			
+			#ifdef STTSAV_DBG
+				//printf("split %i -> %i\n", (int)af->aid.value, (int)numResults);
+			#endif
 
 			for (uint32_t i = 0; i < numResults; ++i)
 				newIds[i] = results[i].aid;
@@ -467,12 +523,16 @@ public:
 			applyArchiveDelta(&oldId, 1, newIds, numResults);
 
 			++numModified;
+			
+			push_back_vector_unique(touchedArchives, oldId);
+			for (uint32_t i = 0; i < numResults; ++i)
+				push_back_vector_unique(touchedArchives, newIds[i]);
 
 			if (incremental) {
 				incrementalMaintenanceCounter = (idx + 1) % numArchives;
 				return numModified;
 				}
-				
+								
 			numArchives = mArchives.size();
 			i = 0;
 			}
@@ -482,6 +542,11 @@ public:
 			uint32_t idx = i;
 			if (incremental)
 				idx = (incrementalMaintenanceCounter + i) % numArchives;
+			
+			totalScanned2++;
+			if (incremental && totalScanned2 > maxToScan)
+				break;
+			
 			ArchiveFile* af = mArchives[idx];
 	
 			if (!af)
@@ -526,6 +591,9 @@ public:
 			archiveId survivor = mergeIds[0];
 			applyArchiveDelta(mergeIds, numMerge, &survivor, 1);
 
+			for (uint32_t i = 0; i < numMerge; ++i)
+				push_back_vector_unique(touchedArchives, mergeIds[i]);
+				
 			++numModified;
 
 			if (incremental) {
@@ -542,6 +610,11 @@ public:
 			uint32_t idx = i;
 			if (incremental)
 				idx = (incrementalMaintenanceCounter + i) % numArchives;
+			
+			totalScanned3++;
+			if (incremental && totalScanned3 > maxToScan)
+				break;
+			
 			ArchiveFile* af = mArchives[idx];
 	
 			if (!af)
@@ -553,14 +626,22 @@ public:
 				const uint64_t liveBytes = (af->fileLength > af->wastedBytes) ? (af->fileLength - af->wastedBytes) : 0;
 				if (liveBytes == 0)
 					continue;
-				if (double(af->wastedBytes) / double(liveBytes) <= compactionRatio)
+				if (double(af->wastedBytes + liveBytes) / double(liveBytes) <= compactionRatio)
 					continue;
 				}
 
 			archiveId id = af->aid;
+			#ifdef STTSAV_DBG
+				//char nBuff[512];
+				//uint32_t nLen = 0;
+				//mDictionary->getArchiveFilename(af->aid, nBuff, nLen, 512);
+				//printf("compacting %i : length %i, waste %i (%s)\n", (int)af->aid.value, (int)af->fileLength, (int)af->wastedBytes, nBuff);
+			#endif
 			applyArchiveDelta(&id, 1, &id, 1);
 			++numModified;
-
+			
+			push_back_vector_unique(touchedArchives, id);
+			
 			if (incremental) {
 				incrementalMaintenanceCounter = (idx + 1) % numArchives;
 				return numModified;
@@ -568,7 +649,7 @@ public:
 			}
 		
 		if (incremental && numArchives)
-			incrementalMaintenanceCounter = (incrementalMaintenanceCounter + 1) % numArchives;
+			incrementalMaintenanceCounter = (incrementalMaintenanceCounter + maxToScan) % numArchives;
 		
 		return numModified;
 		}

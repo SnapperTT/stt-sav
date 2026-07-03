@@ -83,11 +83,11 @@ public:
 	
 // Vector
 template <typename T>
-uint32_t push_back_vector_unique(STTSAV_VECTOR<T>& v, T&& t) {
+uint32_t push_back_vector_unique(STTSAV_VECTOR<T>& v, const T& t) {
 	for (uint32_t i = 0; i < v.size(); ++i) {
 		if (v[i] == t) return i;
 		}
-	v.push_back(std::move(t));
+	v.push_back(t);
 	return v.size()-1;
 	}
 
@@ -102,9 +102,10 @@ public:
 	///
 	/// Different applications may implement different dictionary strategies
 	/// (planetary quadtree, fixed grid, hash table, etc.)
-
+	bool isInitialised;
+	
 // Core Api
-	inline ArchiveDictionaryI() {}
+	inline ArchiveDictionaryI() : isInitialised(false) {}
 	virtual ~ArchiveDictionaryI() {}
 	
 	//archiveKey buildKey(...) // <-- you should have some kind of buildKey function per dictionary

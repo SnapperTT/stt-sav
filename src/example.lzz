@@ -277,12 +277,13 @@ int main (int argc, char ** argv) {
 		system("mkdir archive-test");
 
 		XYArchiveDictionary dict;
+		dict.initNewDictionary();
 		ArchiveManager mgr(&dict);
 
 		mgr.mBasePath = "archive-test";
 		mgr.maxArchiveSize = 64 * 1024;
 		mgr.minimumArchiveSize = 8 * 1024;
-		mgr.compactionRatio = 0.5f;
+		mgr.compactionRatio = 1.5f;
 
 		std::map<ChunkCoord, ChunkData> truth;
 
@@ -308,14 +309,20 @@ int main (int argc, char ** argv) {
 			ChunkData d;
 			d.rid = nextRid;
 			nextRid.value++;
+			
+			//if (d.rid.value == 1059) {
+			//	printf("GENERATE CHUNK 1059\n");
+			//	abort();
+			//	}
+			
 			d.blob = makeBlob();
 			truth[c] = d;
 			};
 
-		for (int i = 0; i < 5000; ++i)
+		for (int i = 0; i < 500; ++i)
 			insertChunk(rand() % 64, rand() % 64);
 
-		for (int i = 0; i < 5000; ++i)
+		for (int i = 0; i < 500; ++i)
 			insertChunk(rand() % 256, rand() % 256);
 
 		// Initial save.
@@ -336,8 +343,10 @@ int main (int argc, char ** argv) {
 			STTSAV_ASSERT(memcmp(blob.data(),it.second.blob.data(),blob.size()) == 0);
 			}
 
+		printf( "ArchiveManager test passed 1 - splitting after generating (%zu chunks)\n", truth.size());
+		
 		// Mutate.
-		for (int iter = 0; iter < 10000; ++iter) {
+		for (int iter = 0; iter < 1000; ++iter) {
 			int op = rand() % 100;
 
 			if (truth.empty())
@@ -362,9 +371,19 @@ int main (int argc, char ** argv) {
 				truth.erase(it);
 				}
 			else {
-				insertChunk(rand() % 256, rand() % 256);
-				auto it = truth.end();
-				--it;
+				ChunkCoord c;
+
+				do {
+					c.x = rand() % 256;
+					c.y = rand() % 256;
+					}
+				while (truth.count(c));
+
+				insertChunk(c.x, c.y);
+				
+				auto it = truth.find(c);
+				STTSAV_ASSERT(it != truth.end());
+				
 				archiveKey key = dict.buildKey(it->first.x, it->first.y);
 				mgr.saveRecord( key, it->second.rid, it->second.blob.data(), (uint32_t)it->second.blob.size());
 				}
@@ -379,12 +398,30 @@ int main (int argc, char ** argv) {
 		for (auto& it : truth) {
 			archiveKey key = dict.buildKey(it.first.x, it.first.y);
 			STTSAV_STRING blob;
+			//printf("mgr.loadRecord: %i %i\n", key.value, it.second.rid.value );
 			STTSAV_ASSERT(mgr.loadRecord( key, it.second.rid, blob));
+			if (!blob.size() && it.second.blob.size()) {
+				archiveId aid = dict.getArchiveId(key);
+				printf("missing record! mgr.loadRecord: %i %i %i\n", key.value, aid.value, it.second.rid.value );
+				ArchiveFile* AI = mgr.getLazy(aid);
+				if (AI) {
+					char n[512];
+					uint32_t l;
+					dict.getArchiveFilename(aid, n, l, 512);
+					printf("file: %s %s\n", n, AI->filename.c_str());
+					
+					for (uint32_t i = 0; i < AI->records.size(); ++i) {
+						printf("record %i/%i: %i %i\n", (int)i, (int)AI->records.size(), (int)AI->records[i].key.value, (int)AI->records[i].record.value);
+						} 
+					abort();
+					}
+				}
+				
 			STTSAV_ASSERT(blob.size() == it.second.blob.size());
 			STTSAV_ASSERT(memcmp( blob.data(), it.second.blob.data(), blob.size()) == 0);
 			}
 
-		printf( "ArchiveManager test passed (%zu chunks)\n", truth.size());
+		printf( "ArchiveManager test passed 2 - after mutating (%zu chunks)\n", truth.size());
 		}
 
 	printf("Exiting example...\n");

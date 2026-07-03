@@ -323,7 +323,8 @@ namespace sttSav
 namespace sttSav
 {
   PlanetaryFaceUVArchiveDictionary::PlanetaryFaceUVArchiveDictionary ()
-                                           {
+    : ArchiveDictionaryI ()
+                                                                  {
 		root.type = PUVADictConstants::NODE_TYPE_ROOT;
 		}
 }
@@ -343,6 +344,7 @@ namespace sttSav
 		n->parent = &root;
 		root.children.push_back(n);
 		mLookup.insertLookup(n);
+		isInitialised = true;
 		}
 }
 namespace sttSav
@@ -407,6 +409,7 @@ namespace sttSav
 		root.destroyChildren();
 		root.decode(v);
 		uint32_t unused = 0;
+		isInitialised = true;
 		return extractArchiveIds(NULL, unused, 0);
 		}
 }

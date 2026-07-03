@@ -97,11 +97,11 @@ public:
 	
 // Vector
 template <typename T>
-uint32_t push_back_vector_unique(STTSAV_VECTOR<T>& v, T&& t) {
+uint32_t push_back_vector_unique(STTSAV_VECTOR<T>& v, const T& t) {
 	for (uint32_t i = 0; i < v.size(); ++i) {
 		if (v[i] == t) return i;
 		}
-	v.push_back(std::move(t));
+	v.push_back(t);
 	return v.size()-1;
 	}
 
@@ -116,9 +116,10 @@ public:
 	///
 	/// Different applications may implement different dictionary strategies
 	/// (planetary quadtree, fixed grid, hash table, etc.)
-
+	bool isInitialised;
+	
 // Core Api
-	inline ArchiveDictionaryI() {}
+	inline ArchiveDictionaryI() : isInitialised(false) {}
 	virtual ~ArchiveDictionaryI() {}
 	
 	//archiveKey buildKey(...) // <-- you should have some kind of buildKey function per dictionary
@@ -2230,6 +2231,8 @@ namespace sttSav
     bool loadRecords ();
     bool loadRecordsWorker ();
     void initNewFileWorker ();
+    bool prepareFileForReading ();
+    bool prepareFileForRecordDeletion ();
     bool prepareFileForWriting ();
   protected:
     void applyDeltas (STTSAV_VECTOR <recordInfo> const & deltas, bool const updateWastedBytes);
@@ -2298,7 +2301,7 @@ namespace sttSav
 {
   uint32_t ArchiveFile::findRecord (recordId const id) const
                                                      {
-		// If this fails to compile be sure to #include <algorithm>
+		// If this fails to compile be sure to #include <algorithm>				
 		auto it = std::lower_bound(records.begin(), records.end(), id, recordInfo::compareRecords());
 		if (it == records.end() || it->record.value != id.value)
 			return -1;
@@ -2339,6 +2342,9 @@ namespace sttSav
                                                                      {
 		STTSAV_ASSERT(hasLoadedRecords);
 		recordOut.clear();
+		
+		//if (id.value == 1136) // canary testing
+		//	printf("READ RECORD 1136\n");
 
 		// Check pending changes first (newest first).
 		uint32_t p = findPendingRecord(id, false);
@@ -2380,6 +2386,9 @@ namespace sttSav
   bool ArchiveFile::writeRecord (archiveKey const key, recordId const id, buffer const buff)
                                                                                      {
 		STTSAV_ASSERT(hasLoadedRecords);
+		
+		//if (id.value == 1136) // canary testing
+		//	printf("WRITE RECORD 1136\n");
 
 		// Remove any existing pending commits
 		uint32_t p = findPendingRecord(id);
@@ -2400,6 +2409,9 @@ namespace sttSav
                                              {
 		STTSAV_ASSERT(hasLoadedRecords);
 
+		//if (id.value == 1136) // canary testing
+		//	printf("DELETE RECORD 1136\n");
+			
 		// Remove any pending entry
 		uint32_t p = findPendingRecord(id);
 		while (p < pendingRecords.size()) {
@@ -2423,6 +2435,7 @@ namespace sttSav
 {
   bool ArchiveFile::loadRecords ()
                            {
+		prepareFileForReading();
 		return loadRecordsWorker();
 		}
 }
@@ -2432,6 +2445,10 @@ namespace sttSav
                                  {
 		// Returns TRUE if archive is ok or truncated and we can recover feilds
 		// Returns FALSE if archive is corrupt and unusable
+		if (!fileExists) {
+			hasLoadedRecords = true;
+			return true;
+			}
 		STTSAV_ASSERT(file.isOpen());
 		fileLength = file.length();
 
@@ -2531,6 +2548,34 @@ namespace sttSav
 }
 namespace sttSav
 {
+  bool ArchiveFile::prepareFileForReading ()
+                                     {
+		if (file.isOpen())
+			return true;
+		if (!fileExists) {
+			hasLoadedRecords = true;
+			return true;
+			}
+		if (!file.openRead(filename.c_str()))
+			return false;
+		if (!hasLoadedRecords)
+			loadRecords();
+		return true;
+		}
+}
+namespace sttSav
+{
+  bool ArchiveFile::prepareFileForRecordDeletion ()
+                                            {
+		if (!fileExists) {
+			hasLoadedRecords = true;
+			return true;
+			}
+		return prepareFileForWriting();
+		}
+}
+namespace sttSav
+{
   bool ArchiveFile::prepareFileForWriting ()
                                      {
 		// Already open for read/write?
@@ -2573,6 +2618,8 @@ namespace sttSav
   void ArchiveFile::applyDeltas (STTSAV_VECTOR <recordInfo> const & deltas, bool const updateWastedBytes)
                                                                                                 {
 		for (const recordInfo& r : deltas) {
+			//if (r.record.value == 1136) // canary testing
+			//	printf("APPLY DELTA 1136\n");
 			uint32_t idx = findRecord(r.record);
 			if (r.length == 0) {
 				// Delete existing record.
@@ -2830,7 +2877,7 @@ namespace sttSav
     bool keepFilesOpen;
   public:
     STTSAV_VECTOR <ArchiveFile*> mArchives;
-    STTSAV_VECTOR <ArchiveFile*> touchedArchives;
+    STTSAV_VECTOR <archiveId> touchedArchives;
     ArchiveManager (ArchiveDictionaryI * _mDictionary);
     ~ ArchiveManager ();
     void clearArchives ();
@@ -2841,6 +2888,7 @@ namespace sttSav
     void applyArchiveDelta (archiveId const * oldIds, uint32_t const numOld, archiveId const * newIds, uint32_t const numNew);
   public:
     bool loadRecord (archiveKey const key, recordId const record, STTSAV_STRING & out);
+    bool saveRecord (archiveKey const key, recordId const record, STTSAV_STRING const & str);
     bool saveRecord (archiveKey const key, recordId const record, char const * buff, uint32_t const len);
     bool saveRecord (archiveKey const key, recordId const record, buffer const buff);
     bool deleteRecord (archiveKey const key, recordId const record);
@@ -2849,6 +2897,7 @@ namespace sttSav
     void closeOpenFiles ();
     void endBulkTransations ();
     uint32_t doMaintenance (bool const incremental, bool const aggressive);
+    uint32_t doMaintenance_worker (bool const incremental, bool const aggressive);
   };
 }
 #undef LZZ_INLINE
@@ -2962,21 +3011,19 @@ namespace sttSav
 		struct DestinationArchive {
 			archiveId aid;
 			ArchiveFile* archive;
-			bool isSurvivor;
+			bool isSameAsASource; // true => there is an identical source file to this destination file
 			};
 		STTSAV_VECTOR<DestinationArchive> destArchives;
+		STTSAV_VECTOR<ArchiveFile*> deletionList;
 
 		// Phase 1 - Ensure all source archives are realised.
 		for (uint32_t i = 0; i < numOld; ++i) {
 			const archiveId aid = oldIds[i];
-
 			if (!aid.value || aid.value > mArchives.size())
 				continue;
-
 			ArchiveFile* src = mArchives[aid.value - 1];
 			if (!src)
 				continue;
-
 			if (!src->hasLoadedRecords) {
 				if (!src->loadRecords())
 					STTSAV_ASSERT(false);
@@ -2990,10 +3037,26 @@ namespace sttSav
 		for (uint32_t i = 0; i < numNew; ++i) {
 			const archiveId aid = newIds[i];
 
-			bool survives = false;
+			bool isSameAsASource = false;
+			
+			char filename[512];
+			uint32_t len = 0;
+			mDictionary->getArchiveFilename(aid, filename, len, sizeof(filename));
+			STTSAV_STRING newFilename = FileOps::joinPath(mBasePath, filename);
+				
 			for (uint32_t j = 0; j < numOld; ++j) {
 				if (oldIds[j].value == aid.value) {
-					survives = true;
+					// Matching ids. Check the filenames to see if the physical file survives
+					// (file names may be different after 					
+					ArchiveFile* oldArchive = getLazy(aid);
+					if (oldArchive) {
+						#ifdef STTSAV_DBG  
+						//printf("test does archive %i survive: %s -> %s (%d)\n", (int)aid.value, newFilename.c_str(), oldArchive->filename.c_str(), (oldArchive->filename == newFilename));
+						#endif
+						isSameAsASource = (oldArchive->filename == newFilename);
+						if (!isSameAsASource)
+							push_back_vector_unique(deletionList, oldArchive);
+						}
 					break;
 					}
 				}
@@ -3001,14 +3064,9 @@ namespace sttSav
 			ArchiveFile* dst = STTSAV_NEW(ArchiveFile);
 
 			dst->aid = aid;
+			dst->filename = newFilename;
 
-			char filename[512];
-			uint32_t len = 0;
-			mDictionary->getArchiveFilename(aid, filename, len, sizeof(filename));
-
-			dst->filename = FileOps::joinPath(mBasePath, filename);
-
-			if (survives)
+			if (isSameAsASource)
 				dst->filename += ".tmp";
 
 			dst->fileExists = false;
@@ -3016,9 +3074,31 @@ namespace sttSav
 			DestinationArchive da;
 			da.aid = aid;
 			da.archive = dst;
-			da.isSurvivor = survives;
+			da.isSameAsASource = isSameAsASource;
 
 			destArchives.push_back(da);
+			}
+		// source files that do not map onto any destination files are marked for deletion
+		for (uint32_t i = 0; i < numOld; ++i) {
+			const archiveId aid = oldIds[i];
+
+			bool survives = false;
+			for (uint32_t j = 0; j < numNew; ++j) {
+				if (newIds[j].value == aid.value) {
+					survives = true;
+					break;
+					}
+				}
+			if (!survives)
+			push_back_vector_unique(deletionList, getLazy(aid));
+			}
+			
+		for (uint32_t i = 0; i < numOld; ++i) {
+			const archiveId aid = oldIds[i];
+			if (!aid.value || aid.value > mArchives.size())
+				continue;
+			ArchiveFile* src = mArchives[aid.value - 1];
+			src->prepareFileForReading();
 			}
 
 		// =========================================================================
@@ -3094,6 +3174,7 @@ namespace sttSav
 				
 				STTSAV_STRING buff;
 				src->readRecord(r.record, buff);
+				dst->prepareFileForWriting();
 				dst->writeRecord(r.key, r.record, buffer(buff.data(), buff.size()));
 				}
 
@@ -3148,7 +3229,7 @@ namespace sttSav
 
 		// Phase 5 - Replace surviving archives.
 		for (DestinationArchive& d : destArchives) {
-			if (!d.isSurvivor)
+			if (!d.isSameAsASource)
 				continue;
 
 			STTSAV_STRING finalName = d.archive->filename;
@@ -3161,34 +3242,21 @@ namespace sttSav
 			}
 
 		// Phase 6 - Remove obsolete source archives.
-		for (uint32_t i = 0; i < numOld; ++i) {
-			const archiveId aid = oldIds[i];
-
-			bool survives = false;
-			for (uint32_t j = 0; j < numNew; ++j) {
-				if (newIds[j].value == aid.value) {
-					survives = true;
-					break;
-					}
-				}
-
-			if (survives)
-				continue;
-			
-			if (!aid.value || aid.value > mArchives.size())
-				continue;
-			
-			ArchiveFile* src = mArchives[aid.value - 1];
+		for (ArchiveFile* src : deletionList) {
 			if (!src)
 				continue;
-
+				
 			if (src->file.isOpen())
 				src->file.close();
+				
+			#ifdef STTSAV_DBG
+			//printf("DELETE %s\n", src->filename.c_str());
+			#endif
 
 			FileOps::deleteFile(src->filename.c_str());
 
 			STTSAV_DEL(src, sizeof(ArchiveFile));
-			mArchives[aid.value - 1] = NULL;
+			mArchives[src->aid.value - 1] = NULL;
 			}
 
 		// Phase 7 - merge our mArchive vectors
@@ -3210,6 +3278,13 @@ namespace sttSav
 		transaction t = transaction::makeLoad(key, record, out);
 		doTransactions(&t, 1);
 		return t.success;
+		}
+}
+namespace sttSav
+{
+  bool ArchiveManager::saveRecord (archiveKey const key, recordId const record, STTSAV_STRING const & str)
+                                                                                               {
+		return saveRecord(key, record, buffer(str.data(), str.size()));
 		}
 }
 namespace sttSav
@@ -3249,9 +3324,13 @@ namespace sttSav
   void ArchiveManager::doTransactions (transaction * mTransactions, int const nTransactions)
                                                                                  {
 		// exectues the transaction
+		STTSAV_ASSERT(mDictionary->isInitialised);
 		for (int i = 0; i < nTransactions; ++i) {
 			transaction& t = mTransactions[i];
 			t.success = false;
+			
+			//if (t.mRecord.value == 1136)  // canary testing
+			//	printf("TRANSACTION 1136 mode=%u\n", t.mode);
 
 			archiveId aid = mDictionary->getArchiveId(mTransactions[i].mKey);
 			if (!aid.value)
@@ -3259,16 +3338,19 @@ namespace sttSav
 			ArchiveFile* archive = getOrCreate(aid);
 			STTSAV_ASSERT(archive);
 			
-			sttSav::push_back_vector_unique(touchedArchives, std::move(archive));
+			sttSav::push_back_vector_unique(touchedArchives, aid);
 
 			switch (t.mode) {
 				case transactionMode::TM_LOAD:
+					archive->prepareFileForReading();
 					t.success = archive->readRecord(t.mRecord, *t.stringOut);
 					break;
 				case transactionMode::TM_SAVE:
+					archive->prepareFileForWriting();
 					t.success = archive->writeRecord(t.mKey, t.mRecord, t.mBufferOut);
 					break;
 				case transactionMode::TM_DELETE:
+					archive->prepareFileForRecordDeletion();
 					t.success = archive->deleteRecord(t.mRecord);
 					break;
 				default:
@@ -3287,7 +3369,8 @@ namespace sttSav
                               {
 		// Commit modified archives.
 		uint32_t failedCommits = 0;
-		for (ArchiveFile* AF : touchedArchives) {
+		for (archiveId aid : touchedArchives) {
+			ArchiveFile* AF = getLazy(aid);
 			if (AF) {
 				if (!AF->commit())
 					failedCommits++;
@@ -3323,7 +3406,20 @@ namespace sttSav
 		// aggressive  = true  => compact any files that have *any* wasted bytes
 		//               false => scan all ArchiveFiles, and compact only files with
 		//                        compactionRatio < (wastedSpace+usedSpace)/usedSpace
+		uint32_t r = doMaintenance_worker(incremental, aggressive);
+		endBulkTransations();
+		return r;
+		}
+}
+namespace sttSav
+{
+  uint32_t ArchiveManager::doMaintenance_worker (bool const incremental, bool const aggressive)
+                                                                                     {
 		uint32_t numModified = 0;
+		uint32_t totalScanned1 = 0;
+		uint32_t totalScanned2 = 0;
+		uint32_t totalScanned3 = 0;
+		const uint32_t maxToScan = incremental ? 20 : uint32_t(-1); // limit scans per incremental tick to prevent testing 10,000 archives a tick
 			
 		// Phase 1 - Split oversized archives.
 		uint32_t numArchives = mArchives.size();
@@ -3334,27 +3430,43 @@ namespace sttSav
 			uint32_t idx = i;
 			if (incremental)
 				idx = (incrementalMaintenanceCounter + i) % numArchives;
-			ArchiveFile* af = mArchives[idx];
-	
+			totalScanned1++;
+			if (incremental && totalScanned1 > maxToScan)
+				break;
+			
+			ArchiveFile* af = mArchives[idx];	
+
 			if (!af)
 				continue;
 			if (!af->hasLoadedRecords && !af->loadRecords())
 				continue;
 			if (af->pendingRecords.size())
-				af->commit();
+				af->commit();	
+
+			#ifdef STTSAV_DBG
+				//char nBuff[512];
+				//uint32_t nLen = 0;
+				//mDictionary->getArchiveFilename(af->aid, nBuff, nLen, 512);
+				//printf("test %i -> %i/%i (%s)\n", (int)af->aid.value, (int)af->fileLength, (int)(maxArchiveSize + af->wastedBytes), nBuff);
+			#endif
+			
 			if (af->fileLength <= maxArchiveSize + af->wastedBytes)
 				continue;
 
-			tmpArr<splitResult, 512> resultsStorage(mDictionary->getArchiveCountUpperBound());
+			tmpArr<splitResult, 512> resultsStorage(512);
 			splitResult* results = resultsStorage.getBuffer();
 
 			uint32_t numResults = 0;
-
+			
 			if (!mDictionary->splitArchive(af->aid, af->records, maxArchiveSize, results, numResults, resultsStorage.size()))
 				continue;
 
 			tmpArr<archiveId, 512> newIdsStorage(numResults);
 			archiveId* newIds = newIdsStorage.getBuffer();
+			
+			#ifdef STTSAV_DBG
+				//printf("split %i -> %i\n", (int)af->aid.value, (int)numResults);
+			#endif
 
 			for (uint32_t i = 0; i < numResults; ++i)
 				newIds[i] = results[i].aid;
@@ -3363,12 +3475,16 @@ namespace sttSav
 			applyArchiveDelta(&oldId, 1, newIds, numResults);
 
 			++numModified;
+			
+			push_back_vector_unique(touchedArchives, oldId);
+			for (uint32_t i = 0; i < numResults; ++i)
+				push_back_vector_unique(touchedArchives, newIds[i]);
 
 			if (incremental) {
 				incrementalMaintenanceCounter = (idx + 1) % numArchives;
 				return numModified;
 				}
-				
+								
 			numArchives = mArchives.size();
 			i = 0;
 			}
@@ -3378,6 +3494,11 @@ namespace sttSav
 			uint32_t idx = i;
 			if (incremental)
 				idx = (incrementalMaintenanceCounter + i) % numArchives;
+			
+			totalScanned2++;
+			if (incremental && totalScanned2 > maxToScan)
+				break;
+			
 			ArchiveFile* af = mArchives[idx];
 	
 			if (!af)
@@ -3422,6 +3543,9 @@ namespace sttSav
 			archiveId survivor = mergeIds[0];
 			applyArchiveDelta(mergeIds, numMerge, &survivor, 1);
 
+			for (uint32_t i = 0; i < numMerge; ++i)
+				push_back_vector_unique(touchedArchives, mergeIds[i]);
+				
 			++numModified;
 
 			if (incremental) {
@@ -3438,6 +3562,11 @@ namespace sttSav
 			uint32_t idx = i;
 			if (incremental)
 				idx = (incrementalMaintenanceCounter + i) % numArchives;
+			
+			totalScanned3++;
+			if (incremental && totalScanned3 > maxToScan)
+				break;
+			
 			ArchiveFile* af = mArchives[idx];
 	
 			if (!af)
@@ -3449,14 +3578,22 @@ namespace sttSav
 				const uint64_t liveBytes = (af->fileLength > af->wastedBytes) ? (af->fileLength - af->wastedBytes) : 0;
 				if (liveBytes == 0)
 					continue;
-				if (double(af->wastedBytes) / double(liveBytes) <= compactionRatio)
+				if (double(af->wastedBytes + liveBytes) / double(liveBytes) <= compactionRatio)
 					continue;
 				}
 
 			archiveId id = af->aid;
+			#ifdef STTSAV_DBG
+				//char nBuff[512];
+				//uint32_t nLen = 0;
+				//mDictionary->getArchiveFilename(af->aid, nBuff, nLen, 512);
+				//printf("compacting %i : length %i, waste %i (%s)\n", (int)af->aid.value, (int)af->fileLength, (int)af->wastedBytes, nBuff);
+			#endif
 			applyArchiveDelta(&id, 1, &id, 1);
 			++numModified;
-
+			
+			push_back_vector_unique(touchedArchives, id);
+			
 			if (incremental) {
 				incrementalMaintenanceCounter = (idx + 1) % numArchives;
 				return numModified;
@@ -3464,7 +3601,7 @@ namespace sttSav
 			}
 		
 		if (incremental && numArchives)
-			incrementalMaintenanceCounter = (incrementalMaintenanceCounter + 1) % numArchives;
+			incrementalMaintenanceCounter = (incrementalMaintenanceCounter + maxToScan) % numArchives;
 		
 		return numModified;
 		}

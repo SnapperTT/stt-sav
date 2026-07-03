@@ -136,7 +136,7 @@ public:
 	DictionaryLookup<node, unpackedKey> mLookup; // Lookup table of active archives. Routing nodes (archive.value == 0) are never present in this table.
 	node root;
 
-	XYArchiveDictionary() {
+	XYArchiveDictionary() : ArchiveDictionaryI() {
 		root.type = XYDictConstants::NODE_TYPE_ROOT;
 		}
 
@@ -154,6 +154,7 @@ public:
 		n->parent = &root;
 		root.children.push_back(n);
 		mLookup.insertLookup(n);
+		isInitialised = true;
 		}
 
 	archiveKey buildKey(const int16_t x, const int16_t y) const {
@@ -194,6 +195,7 @@ public:
 		root.destroyChildren();
 		root.decode(v);
 		uint32_t unused = 0;
+		isInitialised = true;
 		return extractArchiveIds(NULL, unused, 0);
 		}
 			
@@ -202,6 +204,7 @@ public:
 		switch (n->type) {
 			case XYDictConstants::NODE_TYPE_LEAF: 
 				lenOut = snprintf(nameOut, maxLen, "region-sz%i-x%i-y%i.sav", n->size, n->x, n->y);
+				return;
 			default:
 				STTSAV_ASSERT(false);
 			}

@@ -230,7 +230,7 @@ public:
 	DictionaryLookup<node, unpackedKey> mLookup; // Lookup table of active archives. Routing nodes (archive.value == 0) are never present in this table.
 	node root;
 
-	PlanetaryFaceUVArchiveDictionary() {
+	PlanetaryFaceUVArchiveDictionary() : ArchiveDictionaryI() {
 		root.type = PUVADictConstants::NODE_TYPE_ROOT;
 		}
 
@@ -244,6 +244,7 @@ public:
 		n->parent = &root;
 		root.children.push_back(n);
 		mLookup.insertLookup(n);
+		isInitialised = true;
 		}
 
 	archiveKey buildKey(const uint16_t planet, const uint8_t face, const uint8_t flags, const uint8_t localU, const uint8_t localV) const {
@@ -284,6 +285,7 @@ public:
 		root.destroyChildren();
 		root.decode(v);
 		uint32_t unused = 0;
+		isInitialised = true;
 		return extractArchiveIds(NULL, unused, 0);
 		}
 			
