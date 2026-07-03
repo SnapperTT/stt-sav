@@ -409,6 +409,7 @@ namespace sttSav
 		root.destroyChildren();
 		root.decode(v);
 		uint32_t unused = 0;
+		mLookup.rebuildLookupArray(&root);
 		isInitialised = true;
 		return extractArchiveIds(NULL, unused, 0);
 		}

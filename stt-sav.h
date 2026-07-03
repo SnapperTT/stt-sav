@@ -883,7 +883,10 @@ namespace sttSav
   template <typename NODE, typename UNPACKED_KEY>
   void DictionaryLookup <NODE, UNPACKED_KEY>::insertLookup (NODE * n)
                                    {
-		reserveIds(n->aid.value-1);
+		//printf("n->aid.value %i\n", n->aid.value);
+		if (!n->aid.value)
+			return;
+		reserveIds(n->aid.value);
 		mLookup[n->aid.value-1].ptr = n;
 		}
 }
@@ -932,7 +935,7 @@ namespace sttSav
   void DictionaryLookup <NODE, UNPACKED_KEY>::extractArchiveIdsWorker (uint32_t & workingCount, archiveId * archivesOut, uint32_t & numArchivesOut, uint32_t const maxArchivesOut) const
                                                                                                                                                     {
 		for (uint32_t i = 0; i < mLookup.size(); ++i) {
-			if (mLookup[i].aid.value) {
+			if (mLookup[i].ptr) {
 				if (archivesOut && numArchivesOut < maxArchivesOut) {
 					archivesOut[numArchivesOut] = mLookup[i].aid;
 					numArchivesOut++;
@@ -2898,6 +2901,8 @@ namespace sttSav
     void endBulkTransations ();
     uint32_t doMaintenance (bool const incremental, bool const aggressive);
     uint32_t doMaintenance_worker (bool const incremental, bool const aggressive);
+    bool saveDictionary ();
+    bool loadDictionary ();
   };
 }
 #undef LZZ_INLINE
@@ -2990,16 +2995,17 @@ namespace sttSav
 		// Fetch all archive ids.
 		const uint32_t bufferSz = mDictionary->getArchiveCountUpperBound();
 
-		STTSAV_VECTOR<archiveId> ids;
-		ids.resize(bufferSz);
+		tmpArr<archiveId, 512>ids_buff(bufferSz);
+		archiveId* ids = ids_buff.getBuffer();
 		uint32_t numArchives = 0;
-		mDictionary->extractArchiveIds(ids.data(), numArchives, bufferSz);
+		mDictionary->extractArchiveIds(ids, numArchives, bufferSz);
 
 		// Allocate sparse lookup.
 		mArchives.resize(numArchives, NULL);
 		
-		for (uint32_t i = 0; i < numArchives; ++i)
+		for (uint32_t i = 0; i < numArchives; ++i) {
 			getOrCreate(ids[i]);
+			}
 		}
 }
 namespace sttSav
@@ -3240,6 +3246,10 @@ namespace sttSav
 
 			d.archive->filename = finalName;
 			}
+		
+		// Commit the dicitonary
+		if (deletionList.size() || (numOld != 1) || (numNew != 1))
+			saveDictionary();
 
 		// Phase 6 - Remove obsolete source archives.
 		for (ArchiveFile* src : deletionList) {
@@ -3406,9 +3416,23 @@ namespace sttSav
 		// aggressive  = true  => compact any files that have *any* wasted bytes
 		//               false => scan all ArchiveFiles, and compact only files with
 		//                        compactionRatio < (wastedSpace+usedSpace)/usedSpace
-		uint32_t r = doMaintenance_worker(incremental, aggressive);
-		endBulkTransations();
-		return r;
+		if (incremental) {
+			uint32_t r = doMaintenance_worker(incremental, aggressive);
+			endBulkTransations();
+			return r;
+			}
+		else {
+			uint32_t r = 0;
+			uint32_t d = 0;
+			do {
+				d = doMaintenance_worker(incremental, aggressive);
+				r+=d;
+				}
+			while (d);
+			
+			endBulkTransations();
+			return r;
+			}
 		}
 }
 namespace sttSav
@@ -3604,6 +3628,50 @@ namespace sttSav
 			incrementalMaintenanceCounter = (incrementalMaintenanceCounter + maxToScan) % numArchives;
 		
 		return numModified;
+		}
+}
+namespace sttSav
+{
+  bool ArchiveManager::saveDictionary ()
+                              {
+		// Write then atomic-swap
+		STTSAV_STRING data = mDictionary->encodeDictionary();
+		STTSAV_STRING filename = FileOps::joinPath(mBasePath, "dictionary.sav");
+		STTSAV_STRING filenameTmp = filename + ".tmp";
+
+		FileHandle f;
+		if (!f.openReadWrite(filenameTmp.c_str(), true))
+			return false;
+		if (!f.write(data.data(), data.size()))
+			return false;
+		if (!f.flush())
+			return false;
+		f.close();
+	
+		return FileOps::replace(filenameTmp.c_str(), filename.c_str());
+		}
+}
+namespace sttSav
+{
+  bool ArchiveManager::loadDictionary ()
+                              {
+		STTSAV_STRING filename = FileOps::joinPath(mBasePath, "dictionary.sav");
+		if (!FileOps::exists(filename.c_str()))
+			return false;
+
+		FileHandle f;
+		if (!f.openRead(filename.c_str()))
+			return false;
+
+		STTSAV_STRING data;
+		data.resize(f.length());
+		if (!f.read(data.data(), data.size()))
+			return false;
+
+		f.close();
+		mDictionary->decodeDictionary(data);
+		initArchiveFilesFromDictionary();
+		return true;
 		}
 }
 #undef LZZ_INLINE

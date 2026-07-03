@@ -1,14 +1,22 @@
-sttSav is a C++ header only region based save file library.
+sttSav is a C++ lightweight header only region based save file library.
 
 Used in the upcoming title [Turf2](https://turf2.net).
+
+# Features
+* File size and location based partitioning of data. No file gets too big and we don't spam lots of small files
+* Crash resisistant writing. We use append only writing of records. Old records are only removed when new records have finished writing. Compaction is done on files to remove dead records and clean up metadata - new file is written and old is swapped out atomically.
+* Incremental cleanup
+* Both Simple and Bulk api for writing records
+* Lazy loading. Files are only opened when needed.
+* (optional) - binary json style encoding/decoding, using rapidjson style api. You can trivially write a json <-> stt-sav record convertor
 
 # Concepts
 sttSav works with Dictionaries, Archives, Keys and Records.
 
-* Archives are the files where data is saved. These are your region files. Empty regions produce no files. Archives are split into multiple files when they grow too large.
-* Records are the blobs of data. Every record has a `uint32_t` identifier that you use as lookup
-* Keys describe where Records are physically in your game world. 
-* Dictionaries map Keys to Archives
+* `Archives` are the files where data is saved. These are your region files. Empty regions produce no files. Archives are split into multiple files when they grow too large.
+* `Records` are the blobs of data. Every record has a `uint32_t` identifier that you use as lookup. Every record must be world unique
+* `Keys` describe where `Records` are physically in your game world. 
+* `Dictionaries` map Keys to Archives
 * class `ArchiveManager` provides you your interface to use sttSav. Dictionaries, archive files, etc are all handled "under the hood". You just pass `(Key, Record, Blobs)` to ArchiveManager to save, and request `(Key, Record)` from it to load.
 
 ```
@@ -59,15 +67,28 @@ sttSav also provides json style binary serialisation
 
 You don't need to use these helpers, ArchiveManager will accept any blob.
 
-# Using:
+# Using
 ArchiveManager is the fundamental class for stt-sav. You instantate it, assign a dictionary, set you path, and then you start adding data.
 
 ```
+// Initialise new dictionary
+XYArchiveDictionary Dict;
+Dict.initNewDictionary();
+ArchiveManager M(&Dict);
+M.mBasePath = "archive-directory-name";
+M.saveDictionary(); // save our initial dictionary. The dictionary will be auto-saved when it slits or merges archives
+
+// Using
+M.saveRecord(Dict.getKey(x, y), {1337}, dataOut);
+M.loadRecord(Dict.getKey(x, y), {42069}, dataIn);
+```
+
+```
+// Load existing dictionary
 XYArchiveDictionary Dict;
 ArchiveManager M(&Dict);
-
-M.saveRecord(Dict::getKey(x, y), {1337}, dataOut);
-M.loadRecord(Dict::getKey(x, y), {42069}, dataIn);
+M.mBasePath = "archive-directory-name";
+M.loadDictionary();
 ```
 
 ArchiveManager also supports bulk operations to minimize disc i/o:
@@ -86,14 +107,14 @@ You can even batch bulk operations:
 ```
 sttSave::transaction t[32];
 uint32_t nTransations;
-M.startBulkTransations();
+M.startBulkTransations(); // keep files open while working on them
 while (nTransations = queue.read(t, nTransations, 32)) {
 	M.doTransactions(&t, nTransactions);
 	}
 M.endBulkTransations(); // closes any open files
 ```
 
-# Maintenance:
+# Maintenance
 
 Archives are writen in append only. This is to make the archive files resistant against crashes or power outages.
 
@@ -130,7 +151,7 @@ class ArchiveManager {
 Default values are 1.5, 8MB and 1MB respectively.
 
 
-# Building:
+# Building
 This is a single header library. `#include "stt-sav.hh"`, and `#define STT_SAV_IMPL 1` in ONE compilation unit.
 
 To modify source you need [lzz](https://github.com/SnapperTT/lzz-bin).
@@ -144,7 +165,7 @@ An ArchiveDictionaryI maps application-defined archive keys to archive IDs. The 
 
 Different applications may implement different dictionary strategies (planetary quadtree, fixed grid, hash table, etc.).
 
-This is the base class for all Dictionaryies
+This is the base class for all Dictionaries
 
 ## XYArchiveDictionary
 `#include XYArchiveDictionary.h`

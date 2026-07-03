@@ -73,7 +73,10 @@ public:
 		}
 		
 	void insertLookup(NODE* n) {
-		reserveIds(n->aid.value-1);
+		//printf("n->aid.value %i\n", n->aid.value);
+		if (!n->aid.value)
+			return;
+		reserveIds(n->aid.value);
 		mLookup[n->aid.value-1].ptr = n;
 		}
 		
@@ -110,7 +113,7 @@ public:
 		
 	void extractArchiveIdsWorker(uint32_t& workingCount, archiveId* archivesOut, uint32_t& numArchivesOut, const uint32_t maxArchivesOut) const {
 		for (uint32_t i = 0; i < mLookup.size(); ++i) {
-			if (mLookup[i].aid.value) {
+			if (mLookup[i].ptr) {
 				if (archivesOut && numArchivesOut < maxArchivesOut) {
 					archivesOut[numArchivesOut] = mLookup[i].aid;
 					numArchivesOut++;
