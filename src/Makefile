@@ -6,7 +6,7 @@ USE_STTR=
 LAZY=../../lzz-bin/lzz -hx hh
 # Files are combined into single header
 RAWSOURCES=example.lzz sttSav.lzz fileHandle.lzz splitBucket.lzz stringEncoder.lzz binaryValueWriter.lzz  dictionaryLookup.lzz XYArchiveDictionary.lzz planetaryFaceUVArchiveDictionary.lzz archiveFile.lzz archiveManager.lzz 
-SINGLEHEADER_SRC=sttSav.h2 fileHandle.h2 splitBucket.h2 dictionaryLookup.h2 stringEncoder.h2 binaryValueWriter.h2 archiveFile.h2 archiveManager.h2 
+SINGLEHEADER_SRC=sttSav.h2 fileHandle.h2 splitBucket.h2 dictionaryLookup.h2 archiveFile.h2 archiveManager.h2 
 SINGLEHEADER_OUT=stt-sav.h
 # binary serialisation module
 BINVAL_SRC=stringEncoder.h2 binaryValueWriter.h2 

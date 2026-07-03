@@ -9,7 +9,7 @@
 #define STTSAV_DBG
 #define STT_SAV_IMPL
 #include "stt-sav.h"
-#include "binaryValueWriter.hh"
+#include "binaryValueWriter.h"
 
 // PlantartyFace archive system
 #include "planetaryFaceUVArchiveDictionary.h"

@@ -29,6 +29,7 @@ int main (int argc, char * * argv);
 #define STTSAV_DBG
 #define STT_SAV_IMPL
 #include "stt-sav.h"
+#include "binaryValueWriter.h"
 
 // PlantartyFace archive system
 #include "planetaryFaceUVArchiveDictionary.h"
