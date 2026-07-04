@@ -249,6 +249,21 @@ public:
 		const uint8_t t = getBvType();
 		return t >= bvConstants::BV_NUMBERS_START && t <= bvConstants::BV_NUMBERS_END;
 		}
+		
+	inline bool IsSignedInteger() const {
+		const uint8_t t = getBvType();
+		return t >= bvConstants::BV_INT8 && t <= bvConstants::BV_INT64;
+		}
+	
+	inline bool IsUnsignedInteger() const {
+		const uint8_t t = getBvType();
+		return t >= bvConstants::BV_UINT8 && t <= bvConstants::BV_UINT64;
+		}
+		
+	inline bool IsFloating() const {
+		const uint8_t t = getBvType();
+		return t >= bvConstants::BV_FLOAT && t <= bvConstants::BV_DOUBLE;
+		}
 
 	inline uint32_t Size() const {
 		return getMemberCount();
@@ -328,10 +343,14 @@ public:
 		out.offset = off;
 		return out;
 		}
-		
-	BinaryValue operator[](const char *key) const  {
+
+protected:
+	void findChildByKey(const char *key, uint32_t & idxOut, uint64_t & offsetOut) const  {
 		STTSAV_ASSERT(IsValid());
 		STTSAV_ASSERT(IsObject());
+		
+		idxOut = -1;
+		offsetOut = -1;
 		
 		uint64_t off = childOffset();
 		for (uint32_t i = 0; i < Size(); ++i) {
@@ -342,10 +361,9 @@ public:
 			d.parseString(name);
 
 			if (name == key) {
-				BinaryValue out;
-				out.dec = dec;
-				out.offset = d.seek;
-				return out;
+				idxOut = i;
+				offsetOut = d.seek;
+				return ;
 				}
 			
 			BinaryValue v;
@@ -353,7 +371,29 @@ public:
 			v.offset = d.seek;
 			off = v.nextOffset();
 			}
+		}
+
+public:
+	BinaryValue operator[](const char *key) const {
+		uint32_t childIdx;
+		uint64_t childOffset;
+		findChildByKey(key, childIdx, childOffset);
+		if (childIdx < Size()) {
+			BinaryValue out;
+			out.dec = dec;
+			out.offset = childOffset;
+			return out;
+			}
 		return BinaryValue();
+		}
+	
+	bool HasMember(const char* key) const {
+		if (!IsValid()) return false;
+		if (!IsObject()) return false;
+		uint32_t childIdx;
+		uint64_t childOffset;
+		findChildByKey(key, childIdx, childOffset);
+		return (childIdx < Size());
 		}
 		
 	STTSAV_STRING toDbgString() const {

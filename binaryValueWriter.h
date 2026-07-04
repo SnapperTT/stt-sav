@@ -264,6 +264,9 @@ namespace sttSav
     bool IsString () const;
     bool IsBool () const;
     bool IsNumber () const;
+    bool IsSignedInteger () const;
+    bool IsUnsignedInteger () const;
+    bool IsFloating () const;
     uint32_t Size () const;
     int8_t GetInt8 () const;
     int16_t GetInt16 () const;
@@ -282,7 +285,11 @@ namespace sttSav
     void GetStringRef (STTSAV_STRING & out) const;
     uint32_t GetStringLength () const;
     BinaryValue operator [] (uint32_t index) const;
+  protected:
+    void findChildByKey (char const * key, uint32_t & idxOut, uint64_t & offsetOut) const;
+  public:
     BinaryValue operator [] (char const * key) const;
+    bool HasMember (char const * key) const;
     STTSAV_STRING toDbgString () const;
     STTSAV_STRING toDbgStringIndented (uint32_t indent) const;
   };
@@ -465,6 +472,30 @@ namespace sttSav
                                      {
 		const uint8_t t = getBvType();
 		return t >= bvConstants::BV_NUMBERS_START && t <= bvConstants::BV_NUMBERS_END;
+		}
+}
+namespace sttSav
+{
+  LZZ_INLINE bool BinaryValue::IsSignedInteger () const
+                                            {
+		const uint8_t t = getBvType();
+		return t >= bvConstants::BV_INT8 && t <= bvConstants::BV_INT64;
+		}
+}
+namespace sttSav
+{
+  LZZ_INLINE bool BinaryValue::IsUnsignedInteger () const
+                                              {
+		const uint8_t t = getBvType();
+		return t >= bvConstants::BV_UINT8 && t <= bvConstants::BV_UINT64;
+		}
+}
+namespace sttSav
+{
+  LZZ_INLINE bool BinaryValue::IsFloating () const
+                                       {
+		const uint8_t t = getBvType();
+		return t >= bvConstants::BV_FLOAT && t <= bvConstants::BV_DOUBLE;
 		}
 }
 namespace sttSav
@@ -966,10 +997,13 @@ namespace sttSav
 }
 namespace sttSav
 {
-  BinaryValue BinaryValue::operator [] (char const * key) const
-                                                       {
+  void BinaryValue::findChildByKey (char const * key, uint32_t & idxOut, uint64_t & offsetOut) const
+                                                                                             {
 		STTSAV_ASSERT(IsValid());
 		STTSAV_ASSERT(IsObject());
+		
+		idxOut = -1;
+		offsetOut = -1;
 		
 		uint64_t off = childOffset();
 		for (uint32_t i = 0; i < Size(); ++i) {
@@ -980,10 +1014,9 @@ namespace sttSav
 			d.parseString(name);
 
 			if (name == key) {
-				BinaryValue out;
-				out.dec = dec;
-				out.offset = d.seek;
-				return out;
+				idxOut = i;
+				offsetOut = d.seek;
+				return ;
 				}
 			
 			BinaryValue v;
@@ -991,7 +1024,34 @@ namespace sttSav
 			v.offset = d.seek;
 			off = v.nextOffset();
 			}
+		}
+}
+namespace sttSav
+{
+  BinaryValue BinaryValue::operator [] (char const * key) const
+                                                      {
+		uint32_t childIdx;
+		uint64_t childOffset;
+		findChildByKey(key, childIdx, childOffset);
+		if (childIdx < Size()) {
+			BinaryValue out;
+			out.dec = dec;
+			out.offset = childOffset;
+			return out;
+			}
 		return BinaryValue();
+		}
+}
+namespace sttSav
+{
+  bool BinaryValue::HasMember (char const * key) const
+                                              {
+		if (!IsValid()) return false;
+		if (!IsObject()) return false;
+		uint32_t childIdx;
+		uint64_t childOffset;
+		findChildByKey(key, childIdx, childOffset);
+		return (childIdx < Size());
 		}
 }
 namespace sttSav
