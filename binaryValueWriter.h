@@ -289,6 +289,8 @@ namespace sttSav
     void findChildByKey (char const * key, uint32_t & idxOut, uint64_t & offsetOut) const;
   public:
     BinaryValue operator [] (char const * key) const;
+    void ExtractMembers (BinaryValue * bvOut, STTSAV_STRING * keysOut);
+    void ExtractArrayElements (BinaryValue * bvOut);
     bool HasMember (char const * key) const;
     STTSAV_STRING toDbgString () const;
     STTSAV_STRING toDbgStringIndented (uint32_t indent) const;
@@ -1040,6 +1042,47 @@ namespace sttSav
 			return out;
 			}
 		return BinaryValue();
+		}
+}
+namespace sttSav
+{
+  void BinaryValue::ExtractMembers (BinaryValue * bvOut, STTSAV_STRING * keysOut)
+                                                                        {
+		// Populates an array of size Size() objects
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsObject());
+		
+		uint64_t off = childOffset();
+		for (uint32_t i = 0; i < Size(); ++i) {
+			StringDecoder d(*dec);
+			d.seek = off;
+			
+			STTSAV_STRING name;
+			d.parseString(name);
+			
+			keysOut[i] = name;			
+			BinaryValue& v = bvOut[i];
+			v.dec = dec;
+			v.offset = d.seek;
+			off = v.nextOffset();
+			}
+		}
+}
+namespace sttSav
+{
+  void BinaryValue::ExtractArrayElements (BinaryValue * bvOut)
+                                                      {
+		// Populates an array of values of size Size() 
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsArray());
+
+		uint64_t off = childOffset();
+		for (uint32_t i = 0; i < Size(); ++i) {
+			BinaryValue& v = bvOut[i];
+			v.dec = dec;
+			v.offset = off;
+			off = v.nextOffset();
+			}
 		}
 }
 namespace sttSav

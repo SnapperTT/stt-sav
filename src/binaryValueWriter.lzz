@@ -386,6 +386,41 @@ public:
 			}
 		return BinaryValue();
 		}
+		
+	void ExtractMembers(BinaryValue* bvOut, STTSAV_STRING* keysOut) {
+		// Populates an array of size Size() objects
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsObject());
+		
+		uint64_t off = childOffset();
+		for (uint32_t i = 0; i < Size(); ++i) {
+			StringDecoder d(*dec);
+			d.seek = off;
+			
+			STTSAV_STRING name;
+			d.parseString(name);
+			
+			keysOut[i] = name;			
+			BinaryValue& v = bvOut[i];
+			v.dec = dec;
+			v.offset = d.seek;
+			off = v.nextOffset();
+			}
+		}
+		
+	void ExtractArrayElements(BinaryValue* bvOut) {
+		// Populates an array of values of size Size() 
+		STTSAV_ASSERT(IsValid());
+		STTSAV_ASSERT(IsArray());
+
+		uint64_t off = childOffset();
+		for (uint32_t i = 0; i < Size(); ++i) {
+			BinaryValue& v = bvOut[i];
+			v.dec = dec;
+			v.offset = off;
+			off = v.nextOffset();
+			}
+		} 
 	
 	bool HasMember(const char* key) const {
 		if (!IsValid()) return false;
