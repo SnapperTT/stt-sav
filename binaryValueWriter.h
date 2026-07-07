@@ -289,8 +289,8 @@ namespace sttSav
     void findChildByKey (char const * key, uint32_t & idxOut, uint64_t & offsetOut) const;
   public:
     BinaryValue operator [] (char const * key) const;
-    void ExtractMembers (BinaryValue * bvOut, STTSAV_STRING * keysOut);
-    void ExtractArrayElements (BinaryValue * bvOut);
+    void ExtractMembers (BinaryValue * bvOut, STTSAV_STRING * keysOut) const;
+    void ExtractArrayElements (BinaryValue * bvOut) const;
     bool HasMember (char const * key) const;
     STTSAV_STRING toDbgString () const;
     STTSAV_STRING toDbgStringIndented (uint32_t indent) const;
@@ -324,6 +324,7 @@ namespace sttSav
     void StartArray ();
     void EndObject ();
     void EndArray ();
+    void Key (char const * str, uint32_t const sz);
     void Key (char const * str);
     void Int (int const v);
     void Int8 (int8_t const v);
@@ -692,12 +693,19 @@ namespace sttSav
 }
 namespace sttSav
 {
-  LZZ_INLINE void BinaryWriter::Key (char const * str)
-                                         {
+  LZZ_INLINE void BinaryWriter::Key (char const * str, uint32_t const sz)
+                                                            {
 		STTSAV_ASSERT(!stack.empty());
 		STTSAV_ASSERT(stack.back().isObject);
 		stack.back().memberCount++;
 		enc->parseString(str, strlen(str));
+		}
+}
+namespace sttSav
+{
+  LZZ_INLINE void BinaryWriter::Key (char const * str)
+                                         {
+		Key(str, strlen(str));
 		}
 }
 namespace sttSav
@@ -1046,8 +1054,8 @@ namespace sttSav
 }
 namespace sttSav
 {
-  void BinaryValue::ExtractMembers (BinaryValue * bvOut, STTSAV_STRING * keysOut)
-                                                                        {
+  void BinaryValue::ExtractMembers (BinaryValue * bvOut, STTSAV_STRING * keysOut) const
+                                                                              {
 		// Populates an array of size Size() objects
 		STTSAV_ASSERT(IsValid());
 		STTSAV_ASSERT(IsObject());
@@ -1070,8 +1078,8 @@ namespace sttSav
 }
 namespace sttSav
 {
-  void BinaryValue::ExtractArrayElements (BinaryValue * bvOut)
-                                                      {
+  void BinaryValue::ExtractArrayElements (BinaryValue * bvOut) const
+                                                            {
 		// Populates an array of values of size Size() 
 		STTSAV_ASSERT(IsValid());
 		STTSAV_ASSERT(IsArray());

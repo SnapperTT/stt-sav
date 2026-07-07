@@ -387,7 +387,7 @@ public:
 		return BinaryValue();
 		}
 		
-	void ExtractMembers(BinaryValue* bvOut, STTSAV_STRING* keysOut) {
+	void ExtractMembers(BinaryValue* bvOut, STTSAV_STRING* keysOut) const {
 		// Populates an array of size Size() objects
 		STTSAV_ASSERT(IsValid());
 		STTSAV_ASSERT(IsObject());
@@ -408,7 +408,7 @@ public:
 			}
 		}
 		
-	void ExtractArrayElements(BinaryValue* bvOut) {
+	void ExtractArrayElements(BinaryValue* bvOut) const {
 		// Populates an array of values of size Size() 
 		STTSAV_ASSERT(IsValid());
 		STTSAV_ASSERT(IsArray());
@@ -634,11 +634,15 @@ public:
 		endContainer();
 		}
 
-	inline void Key(const char *str) {
+	inline void Key(const char *str, const uint32_t sz) {
 		STTSAV_ASSERT(!stack.empty());
 		STTSAV_ASSERT(stack.back().isObject);
 		stack.back().memberCount++;
 		enc->parseString(str, strlen(str));
+		}
+		
+	inline void Key(const char *str) {
+		Key(str, strlen(str));
 		}
 
 	inline void Int(const int v) { Int32(v); }

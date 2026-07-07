@@ -337,6 +337,9 @@ namespace sttSav
     static bool replace (char const * filenameOld, char const * filenameNew);
     static bool deleteFile (char const * filename);
     static STTSAV_STRING joinPath (STTSAV_STRING const & lhs, STTSAV_STRING const & rhs);
+    static STTSAV_STRING stripTrailingSlashes (STTSAV_STRING const & path);
+    static bool isDirectory (char const * path);
+    static bool createDirectories (char const * path);
   };
 }
 namespace sttSav
@@ -436,6 +439,8 @@ namespace sttSav
 	#include <io.h>
 #else
 	#include <unistd.h>
+	#include <errno.h>
+	#include <sys/stat.h>
 #endif
 #define LZZ_INLINE inline
 namespace sttSav
@@ -491,6 +496,97 @@ namespace sttSav
 		constexpr char SEP = '/';
 		#endif
 		return lhs + SEP + rhs;
+		}
+}
+namespace sttSav
+{
+  STTSAV_STRING FileOps::stripTrailingSlashes (STTSAV_STRING const & path)
+                                                                             {
+		if (path.empty())
+			return path;
+
+		STTSAV_STRING out = path;
+		
+		// Don't strip the filesystem root.
+		while (out.size() > 1) {
+	#ifdef _WIN32
+			// Preserve "C:\".
+			if (out.size() == 3 &&
+				out[1] == ':' &&
+				(out[2] == '/' || out[2] == '\\'))
+				break;
+	#endif
+			char c = out.back();
+			if (c != '/' && c != '\\')
+				break;
+			out.pop_back();
+			}
+		return out;
+		}
+}
+namespace sttSav
+{
+  bool FileOps::isDirectory (char const * path)
+                                                  {
+		if (!path || !*path)
+			return false;
+			
+		STTSAV_STRING p = stripTrailingSlashes(path);
+
+		#ifdef _WIN32
+		DWORD attrs = GetFileAttributesA(p.c_str());
+		if (attrs == INVALID_FILE_ATTRIBUTES)
+			return false;
+
+		return (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+		#else
+		struct stat st;
+		if (stat(p.c_str(), &st) != 0)
+			return false;
+
+		return S_ISDIR(st.st_mode);
+		#endif
+		}
+}
+namespace sttSav
+{
+  bool FileOps::createDirectories (char const * path)
+                                                        {
+		STTSAV_STRING dir = stripTrailingSlashes(path);
+
+		if (dir.empty())
+			return false;
+
+		// Already exists?
+		if (isDirectory(dir.c_str()))
+			return true;
+
+		// Create parent first.
+		size_t pos = dir.find_last_of("/\\");
+		if (pos != STTSAV_STRING::npos) {
+			STTSAV_STRING parent = dir.substr(0, pos);
+
+			// Avoid recursing on "/" or "C:\"
+			if (!parent.empty() && parent != dir) {
+				if (!createDirectories(parent.c_str()))
+					return false;
+				}
+			}
+
+	#ifdef _WIN32
+		if (!CreateDirectoryA(dir.c_str(), NULL)) {
+			DWORD err = GetLastError();
+			if (err != ERROR_ALREADY_EXISTS)
+				return false;
+			}
+	#else
+		if (::mkdir(dir.c_str(), 0755) != 0) {
+			if (errno != EEXIST)
+				return false;
+			}
+	#endif
+
+		return isDirectory(dir.c_str());
 		}
 }
 namespace sttSav
