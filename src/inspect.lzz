@@ -66,34 +66,6 @@ enum UiMode {
 	UI_ARCHIVES,
 	UI_RECORDS
 	};
-
-enum JobType {
-	JOB_UNKOWN,
-	JOB_PREVIEW_ARCHIVE,
-	JOB_OPEN_ARCHIVE
-	};
-
-struct Job {
-	JobType type;
-	uint64_t generation;
-	STTSAV_STRING manualFilename;
-
-	sttSav::ArchiveManager* archiveManager;
-	sttSav::archiveId aid;
-	
-	inline Job() : type(JOB_UNKOWN), generation(0), archiveManager(NULL), aid({0}) {}
-	};
-
-struct Result {
-	JobType type;
-	uint64_t generation;
-	sttSav::archiveId aid;
-	bool success;
-	ArchivePreview preview;
-	
-	inline Result() : type(JOB_UNKOWN), generation(0), aid({0}), success(0) {}
-	};
-
 	
 void processPreview(RecordPreview& preview) {
 	preview.type = PREVIEW_BLOB;
@@ -125,7 +97,6 @@ void processPreview(RecordPreview& preview) {
 				}
 			}
 		}
-	
 
 	// ASCII?
 	bool ascii = true;
@@ -207,131 +178,6 @@ bool loadRecord(sttSav::ArchiveManager& AM, const sttSav::archiveKey key,  const
 	return true;
 	}
 
-struct JobThread {
-	std::thread thread;
-	std::mutex mutex;
-	std::condition_variable cv;
-	std::deque<Job> pendingJobs;
-	std::deque<Result> completedJobs;
-    ftxui::ScreenInteractive* screen;
-	bool quit;
-	
-	JobThread() : screen(NULL), quit(false) {}
-
-	void start() {
-		thread = std::thread(main_static, this);
-		}
-
-	void stop() {
-		{
-			std::lock_guard<std::mutex> lock(mutex);
-			quit = true;
-		}
-		cv.notify_one();
-		if (thread.joinable())
-			thread.join();
-		}
-
-	void queuePreview(sttSav::ArchiveManager* am, const STTSAV_STRING& manualFilename, sttSav::archiveId aid, uint64_t generation) {
-		std::lock_guard<std::mutex> lock(mutex);
-
-		// Only keep the newest preview request.
-		for (auto it = pendingJobs.begin(); it != pendingJobs.end();) {
-			if (it->type == JOB_PREVIEW_ARCHIVE)
-				it = pendingJobs.erase(it);
-			else
-				++it;
-			}
-
-		Job j;
-		j.type = JOB_PREVIEW_ARCHIVE;
-		j.archiveManager = aid.value ? am : NULL;
-		j.aid = aid;
-		j.generation = generation;
-		j.manualFilename = manualFilename;
-
-		pendingJobs.push_back(j);
-
-		cv.notify_one();
-		}
-
-	void queueOpen(sttSav::ArchiveManager* am, const STTSAV_STRING& manualFilename, sttSav::archiveId aid, uint64_t generation) {
-		std::lock_guard<std::mutex> lock(mutex);
-		Job j;
-		j.type = JOB_OPEN_ARCHIVE;
-		j.archiveManager = aid.value ? am : NULL;
-		j.aid = aid;
-		j.generation = generation;
-		j.manualFilename = manualFilename;
-
-		pendingJobs.push_back(j);
-
-		cv.notify_one();
-		}
-
-	bool popCompleted(Result& out) {
-		std::lock_guard<std::mutex> lock(mutex);
-
-		if (completedJobs.empty())
-			return false;
-
-		out = std::move(completedJobs.front());
-		completedJobs.pop_front();
-		return true;
-		}
-
-	void main_impl() {
-		while (true) {
-			Job job;
-			{
-				std::unique_lock<std::mutex> lock(mutex);
-
-				cv.wait(lock, [&] {
-					return quit || !pendingJobs.empty();
-				});
-
-				if (quit)
-					break;
-
-				job = std::move(pendingJobs.front());
-				pendingJobs.pop_front();
-			}
-
-			Result result;
-
-			result.type = job.type;
-			result.aid = job.aid;
-			result.generation = job.generation;
-
-			switch (job.type) {
-				case JOB_PREVIEW_ARCHIVE:
-					result.success = loadPreview(job.archiveManager, job.manualFilename, job.aid, result.preview);
-					break;
-
-				case JOB_OPEN_ARCHIVE:
-					//result.success = loadPreview(job.archiveManager, job.manualFilename, job.aid, result.preview);
-					result.success = false;
-					break;
-
-				default:
-					break;
-				}
-			
-			{
-				std::lock_guard<std::mutex> lock(mutex);
-				completedJobs.push_back(std::move(result));
-			}
-			
-			if (screen)
-				screen->PostEvent(ftxui::Event::Custom);
-			}
-		}
-
-	static void main_static(JobThread* data) {
-		data->main_impl();
-		}
-	};
-	
 enum FocusPane {
     FOCUS_LEFT,
     FOCUS_RIGHT
@@ -700,8 +546,12 @@ int main(int argc, char** argv) {
 		bool handled = (mode == UI_ARCHIVES) ? archiveContainer->OnEvent(event) : recordContainer->OnEvent(event);
 
 		if (mode == UI_ARCHIVES && selectedArchive != oldArchive) {
-			previewLoading = true;
-			jThread.queuePreview( &archiveManager, archives[selectedArchive].filename, archives[selectedArchive].aid, ++previewGeneration);
+			if (selectedRecord >= 0 && selectedRecord < (int)currentPreview.records.size()) {
+				if (archives[selectedArchive].aid.value)
+					loadPreview(&archiveManager, archives[selectedArchive].filename, archives[selectedArchive].aid, archives[selectedArchive].preview);
+				else
+					loadPreview(NULL, archives[selectedArchive].filename, archives[selectedArchive].aid, archives[selectedArchive].preview);
+				}
 			}
 
 		if (mode == UI_RECORDS && selectedRecord != oldRecord) {
@@ -731,26 +581,6 @@ int main(int argc, char** argv) {
 		if ((event == Event::ArrowLeft || event == Event::Backspace) && mode == UI_RECORDS) {
 			mode = UI_ARCHIVES;
 			rebuildLeftItems();
-			return true;
-			}
-
-		if (event == Event::Custom) {
-			Result r;
-			while (jThread.popCompleted(r)) {
-				switch (r.type) {
-					case JOB_PREVIEW_ARCHIVE:
-						if (r.generation == previewGeneration) {
-							currentPreview = std::move(r.preview);
-							previewLoading = false;
-							}
-						break;
-
-					case JOB_OPEN_ARCHIVE:
-						// TODO
-						break;
-					default: break;
-					}
-				}
 			return true;
 			}
 
