@@ -55,10 +55,15 @@ struct ArchivePreview {
 	
 	inline ArchivePreview() : totalBytes(0), wastedBytes(0), fileLength(0), isArchive(false) {}
 	
-	~ArchivePreview() {
+	void destroyRecords() {
 		for (RecordPreview* P : recordPreviews)
 			delete P;
+		records.clear();
 		recordPreviews.clear();
+		}
+	
+	~ArchivePreview() {
+		destroyRecords();
 		}
 	};
 
@@ -123,11 +128,11 @@ void processPreview(RecordPreview& preview) {
 	
 bool loadPreview(sttSav::ArchiveManager* AM, const STTSAV_STRING& manualFilename, const sttSav::archiveId aid, ArchivePreview& preview) {
 	// Loads a preview
-	preview.records.clear();
+	preview.destroyRecords();
 	preview.totalBytes = 0;
 	preview.wastedBytes = 0;
 	preview.fileLength = 0;
-
+	
 	if (AM) {
 		sttSav::ArchiveFile* archive = AM->getLazy(aid);
 		if (!archive)
@@ -281,23 +286,19 @@ int main(int argc, char** argv) {
 
 	printf("Loaded %zu archives.\n", archives.size());
 
-	// Init worker thread
-	JobThread jThread;
-	
-	// Init viewer
-	uint64_t previewGeneration = 0;
+	// Init worker thread	
 
 	UiMode mode = UI_ARCHIVES;
 	int selectedArchive = 0;
 	int selectedRecord = 0;
 
-	bool previewLoading = false;
 	ArchivePreview currentPreview;
-
-	// Queue initial preview.
-	if (!archives.empty()) {
-		previewLoading = true;
-		jThread.queuePreview( &archiveManager, archives[selectedArchive].filename, archives[selectedArchive].aid, ++previewGeneration);
+	
+	if (selectedArchive >= 0 && selectedArchive < (int)archives.size()) {
+		if (archives[selectedArchive].aid.value)
+			loadPreview(&archiveManager, archives[selectedArchive].filename, archives[selectedArchive].aid, currentPreview);
+		else
+			loadPreview(NULL, archives[selectedArchive].filename, archives[selectedArchive].aid, currentPreview);
 		}
 	
 	// Used to truncate "archive-test/" from every directory
@@ -354,10 +355,7 @@ int main(int argc, char** argv) {
 			elems.push_back(text("Filename   : " + a.filename));
 			elems.push_back(separator());
 
-			if (previewLoading) {
-				elems.push_back(text("Loading preview..."));
-				}
-			else {
+			{
 				char buff[256];
 				snprintf(buff,sizeof(buff),"Records     : %u", (unsigned)currentPreview.records.size());
 				elems.push_back(text(buff));
@@ -367,7 +365,7 @@ int main(int argc, char** argv) {
 				elems.push_back(text(buff));
 				snprintf(buff,sizeof(buff),"File Size   : %llu", (unsigned long long)currentPreview.fileLength);
 				elems.push_back(text(buff));
-				}
+			}
 
 			return vbox(std::move(elems));
 			}
@@ -528,8 +526,6 @@ int main(int argc, char** argv) {
 	});
 
 	auto screen = ScreenInteractive::Fullscreen();
-	jThread.screen = &screen;
-	jThread.start(); 
 
 	// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// Event handling
@@ -546,14 +542,15 @@ int main(int argc, char** argv) {
 		bool handled = (mode == UI_ARCHIVES) ? archiveContainer->OnEvent(event) : recordContainer->OnEvent(event);
 
 		if (mode == UI_ARCHIVES && selectedArchive != oldArchive) {
-			if (selectedRecord >= 0 && selectedRecord < (int)currentPreview.records.size()) {
+			if (selectedArchive >= 0 && selectedArchive < (int)archives.size()) {
 				if (archives[selectedArchive].aid.value)
-					loadPreview(&archiveManager, archives[selectedArchive].filename, archives[selectedArchive].aid, archives[selectedArchive].preview);
+					loadPreview(&archiveManager, archives[selectedArchive].filename, archives[selectedArchive].aid, currentPreview);
 				else
-					loadPreview(NULL, archives[selectedArchive].filename, archives[selectedArchive].aid, archives[selectedArchive].preview);
+					loadPreview(NULL, archives[selectedArchive].filename, archives[selectedArchive].aid, currentPreview);
 				}
 			}
 
+		if (selectedRecord < 0) selectedRecord = 0;
 		if (mode == UI_RECORDS && selectedRecord != oldRecord) {
 			if (selectedRecord >= 0 && selectedRecord < (int)currentPreview.records.size()) {
 				const sttSav::recordInfo& r = currentPreview.records[selectedRecord];
@@ -574,6 +571,13 @@ int main(int argc, char** argv) {
 			mode = UI_RECORDS;
 			selectedRecord = 0;
 			rebuildLeftItems();
+			
+			if (selectedRecord >= 0 && selectedRecord < (int)currentPreview.records.size()) {
+				const sttSav::recordInfo& r = currentPreview.records[selectedRecord];
+				if (!currentPreview.recordPreviews[selectedRecord])
+					currentPreview.recordPreviews[selectedRecord] = STTSAV_NEW(RecordPreview);
+				loadRecord(archiveManager, r.key, r.record, *currentPreview.recordPreviews[selectedRecord]);
+				}
 			return true;
 			}
 
@@ -590,7 +594,6 @@ int main(int argc, char** argv) {
 	screen.Loop(root);
 	} // FTXUI Loop End
 	
-	jThread.stop();
 	STTSAV_DEL(dictionary, sizeof(*dictionary));
 
 	return 0;

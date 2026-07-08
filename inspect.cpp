@@ -75,10 +75,15 @@ struct ArchivePreview {
 	
 	inline ArchivePreview() : totalBytes(0), wastedBytes(0), fileLength(0), isArchive(false) {}
 	
-	~ArchivePreview() {
+	void destroyRecords() {
 		for (RecordPreview* P : recordPreviews)
 			delete P;
+		records.clear();
 		recordPreviews.clear();
+		}
+	
+	~ArchivePreview() {
+		destroyRecords();
 		}
 	};
 
@@ -86,34 +91,6 @@ enum UiMode {
 	UI_ARCHIVES,
 	UI_RECORDS
 	};
-
-enum JobType {
-	JOB_UNKOWN,
-	JOB_PREVIEW_ARCHIVE,
-	JOB_OPEN_ARCHIVE
-	};
-
-struct Job {
-	JobType type;
-	uint64_t generation;
-	STTSAV_STRING manualFilename;
-
-	sttSav::ArchiveManager* archiveManager;
-	sttSav::archiveId aid;
-	
-	inline Job() : type(JOB_UNKOWN), generation(0), archiveManager(NULL), aid({0}) {}
-	};
-
-struct Result {
-	JobType type;
-	uint64_t generation;
-	sttSav::archiveId aid;
-	bool success;
-	ArchivePreview preview;
-	
-	inline Result() : type(JOB_UNKOWN), generation(0), aid({0}), success(0) {}
-	};
-
 	
 void processPreview(RecordPreview& preview) {
 	preview.type = PREVIEW_BLOB;
@@ -145,7 +122,6 @@ void processPreview(RecordPreview& preview) {
 				}
 			}
 		}
-	
 
 	// ASCII?
 	bool ascii = true;
@@ -172,11 +148,11 @@ void processPreview(RecordPreview& preview) {
 	
 bool loadPreview(sttSav::ArchiveManager* AM, const STTSAV_STRING& manualFilename, const sttSav::archiveId aid, ArchivePreview& preview) {
 	// Loads a preview
-	preview.records.clear();
+	preview.destroyRecords();
 	preview.totalBytes = 0;
 	preview.wastedBytes = 0;
 	preview.fileLength = 0;
-
+	
 	if (AM) {
 		sttSav::ArchiveFile* archive = AM->getLazy(aid);
 		if (!archive)
@@ -227,131 +203,6 @@ bool loadRecord(sttSav::ArchiveManager& AM, const sttSav::archiveKey key,  const
 	return true;
 	}
 
-struct JobThread {
-	std::thread thread;
-	std::mutex mutex;
-	std::condition_variable cv;
-	std::deque<Job> pendingJobs;
-	std::deque<Result> completedJobs;
-    ftxui::ScreenInteractive* screen;
-	bool quit;
-	
-	JobThread() : screen(NULL), quit(false) {}
-
-	void start() {
-		thread = std::thread(main_static, this);
-		}
-
-	void stop() {
-		{
-			std::lock_guard<std::mutex> lock(mutex);
-			quit = true;
-		}
-		cv.notify_one();
-		if (thread.joinable())
-			thread.join();
-		}
-
-	void queuePreview(sttSav::ArchiveManager* am, const STTSAV_STRING& manualFilename, sttSav::archiveId aid, uint64_t generation) {
-		std::lock_guard<std::mutex> lock(mutex);
-
-		// Only keep the newest preview request.
-		for (auto it = pendingJobs.begin(); it != pendingJobs.end();) {
-			if (it->type == JOB_PREVIEW_ARCHIVE)
-				it = pendingJobs.erase(it);
-			else
-				++it;
-			}
-
-		Job j;
-		j.type = JOB_PREVIEW_ARCHIVE;
-		j.archiveManager = aid.value ? am : NULL;
-		j.aid = aid;
-		j.generation = generation;
-		j.manualFilename = manualFilename;
-
-		pendingJobs.push_back(j);
-
-		cv.notify_one();
-		}
-
-	void queueOpen(sttSav::ArchiveManager* am, const STTSAV_STRING& manualFilename, sttSav::archiveId aid, uint64_t generation) {
-		std::lock_guard<std::mutex> lock(mutex);
-		Job j;
-		j.type = JOB_OPEN_ARCHIVE;
-		j.archiveManager = aid.value ? am : NULL;
-		j.aid = aid;
-		j.generation = generation;
-		j.manualFilename = manualFilename;
-
-		pendingJobs.push_back(j);
-
-		cv.notify_one();
-		}
-
-	bool popCompleted(Result& out) {
-		std::lock_guard<std::mutex> lock(mutex);
-
-		if (completedJobs.empty())
-			return false;
-
-		out = std::move(completedJobs.front());
-		completedJobs.pop_front();
-		return true;
-		}
-
-	void main_impl() {
-		while (true) {
-			Job job;
-			{
-				std::unique_lock<std::mutex> lock(mutex);
-
-				cv.wait(lock, [&] {
-					return quit || !pendingJobs.empty();
-				});
-
-				if (quit)
-					break;
-
-				job = std::move(pendingJobs.front());
-				pendingJobs.pop_front();
-			}
-
-			Result result;
-
-			result.type = job.type;
-			result.aid = job.aid;
-			result.generation = job.generation;
-
-			switch (job.type) {
-				case JOB_PREVIEW_ARCHIVE:
-					result.success = loadPreview(job.archiveManager, job.manualFilename, job.aid, result.preview);
-					break;
-
-				case JOB_OPEN_ARCHIVE:
-					//result.success = loadPreview(job.archiveManager, job.manualFilename, job.aid, result.preview);
-					result.success = false;
-					break;
-
-				default:
-					break;
-				}
-			
-			{
-				std::lock_guard<std::mutex> lock(mutex);
-				completedJobs.push_back(std::move(result));
-			}
-			
-			if (screen)
-				screen->PostEvent(ftxui::Event::Custom);
-			}
-		}
-
-	static void main_static(JobThread* data) {
-		data->main_impl();
-		}
-	};
-	
 enum FocusPane {
     FOCUS_LEFT,
     FOCUS_RIGHT
@@ -455,23 +306,19 @@ int main (int argc, char * * argv)
 
 	printf("Loaded %zu archives.\n", archives.size());
 
-	// Init worker thread
-	JobThread jThread;
-	
-	// Init viewer
-	uint64_t previewGeneration = 0;
+	// Init worker thread	
 
 	UiMode mode = UI_ARCHIVES;
 	int selectedArchive = 0;
 	int selectedRecord = 0;
 
-	bool previewLoading = false;
 	ArchivePreview currentPreview;
-
-	// Queue initial preview.
-	if (!archives.empty()) {
-		previewLoading = true;
-		jThread.queuePreview( &archiveManager, archives[selectedArchive].filename, archives[selectedArchive].aid, ++previewGeneration);
+	
+	if (selectedArchive >= 0 && selectedArchive < (int)archives.size()) {
+		if (archives[selectedArchive].aid.value)
+			loadPreview(&archiveManager, archives[selectedArchive].filename, archives[selectedArchive].aid, currentPreview);
+		else
+			loadPreview(NULL, archives[selectedArchive].filename, archives[selectedArchive].aid, currentPreview);
 		}
 	
 	// Used to truncate "archive-test/" from every directory
@@ -528,10 +375,7 @@ int main (int argc, char * * argv)
 			elems.push_back(text("Filename   : " + a.filename));
 			elems.push_back(separator());
 
-			if (previewLoading) {
-				elems.push_back(text("Loading preview..."));
-				}
-			else {
+			{
 				char buff[256];
 				snprintf(buff,sizeof(buff),"Records     : %u", (unsigned)currentPreview.records.size());
 				elems.push_back(text(buff));
@@ -541,7 +385,7 @@ int main (int argc, char * * argv)
 				elems.push_back(text(buff));
 				snprintf(buff,sizeof(buff),"File Size   : %llu", (unsigned long long)currentPreview.fileLength);
 				elems.push_back(text(buff));
-				}
+			}
 
 			return vbox(std::move(elems));
 			}
@@ -702,8 +546,6 @@ int main (int argc, char * * argv)
 	});
 
 	auto screen = ScreenInteractive::Fullscreen();
-	jThread.screen = &screen;
-	jThread.start(); 
 
 	// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// Event handling
@@ -720,10 +562,22 @@ int main (int argc, char * * argv)
 		bool handled = (mode == UI_ARCHIVES) ? archiveContainer->OnEvent(event) : recordContainer->OnEvent(event);
 
 		if (mode == UI_ARCHIVES && selectedArchive != oldArchive) {
-			previewLoading = true;
-			jThread.queuePreview( &archiveManager, archives[selectedArchive].filename, archives[selectedArchive].aid, ++previewGeneration);
+			if (selectedArchive >= 0 && selectedArchive < (int)archives.size()) {
+				if (archives[selectedArchive].aid.value)
+					loadPreview(&archiveManager, archives[selectedArchive].filename, archives[selectedArchive].aid, currentPreview);
+				else
+					loadPreview(NULL, archives[selectedArchive].filename, archives[selectedArchive].aid, currentPreview);
+					
+				//if (selectedRecord >= 0 && selectedRecord < (int)currentPreview.records.size()) {
+				//	const sttSav::recordInfo& r = currentPreview.records[selectedRecord];
+				//	if (!currentPreview.recordPreviews[selectedRecord])
+				//		currentPreview.recordPreviews[selectedRecord] = STTSAV_NEW(RecordPreview);
+				//	loadRecord(archiveManager, r.key, r.record, *currentPreview.recordPreviews[selectedRecord]);
+				//	}
+				}
 			}
 
+		if (selectedRecord < 0) selectedRecord = 0;
 		if (mode == UI_RECORDS && selectedRecord != oldRecord) {
 			if (selectedRecord >= 0 && selectedRecord < (int)currentPreview.records.size()) {
 				const sttSav::recordInfo& r = currentPreview.records[selectedRecord];
@@ -744,6 +598,13 @@ int main (int argc, char * * argv)
 			mode = UI_RECORDS;
 			selectedRecord = 0;
 			rebuildLeftItems();
+			
+			if (selectedRecord >= 0 && selectedRecord < (int)currentPreview.records.size()) {
+				const sttSav::recordInfo& r = currentPreview.records[selectedRecord];
+				if (!currentPreview.recordPreviews[selectedRecord])
+					currentPreview.recordPreviews[selectedRecord] = STTSAV_NEW(RecordPreview);
+				loadRecord(archiveManager, r.key, r.record, *currentPreview.recordPreviews[selectedRecord]);
+				}
 			return true;
 			}
 
@@ -754,33 +615,12 @@ int main (int argc, char * * argv)
 			return true;
 			}
 
-		if (event == Event::Custom) {
-			Result r;
-			while (jThread.popCompleted(r)) {
-				switch (r.type) {
-					case JOB_PREVIEW_ARCHIVE:
-						if (r.generation == previewGeneration) {
-							currentPreview = std::move(r.preview);
-							previewLoading = false;
-							}
-						break;
-
-					case JOB_OPEN_ARCHIVE:
-						// TODO
-						break;
-					default: break;
-					}
-				}
-			return true;
-			}
-
 		return handled;
 		});
 
 	screen.Loop(root);
 	} // FTXUI Loop End
 	
-	jThread.stop();
 	STTSAV_DEL(dictionary, sizeof(*dictionary));
 
 	return 0;
