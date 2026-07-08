@@ -167,6 +167,9 @@ public:
 	
 	// printf's to stdout this dictonary
 	virtual void dbgDump() const {}
+	
+	// used for serialising dictionary type
+	virtual const char* getDictionaryName() const { return "ArchiveDictionaryI"; }
 	};
 	
 

@@ -5,7 +5,7 @@ USE_STTR=
 
 LAZY=../../lzz-bin/lzz -hx hh
 # Files are combined into single header
-RAWSOURCES=example.lzz sttSav.lzz fileHandle.lzz splitBucket.lzz stringEncoder.lzz binaryValueWriter.lzz  dictionaryLookup.lzz XYArchiveDictionary.lzz planetaryFaceUVArchiveDictionary.lzz archiveFile.lzz archiveManager.lzz 
+RAWSOURCES=example.lzz sttSav.lzz fileHandle.lzz splitBucket.lzz stringEncoder.lzz binaryValueWriter.lzz  dictionaryLookup.lzz XYArchiveDictionary.lzz planetaryFaceUVArchiveDictionary.lzz archiveFile.lzz archiveManager.lzz inspect.lzz
 SINGLEHEADER_SRC=sttSav.h2 fileHandle.h2 splitBucket.h2 dictionaryLookup.h2 archiveFile.h2 archiveManager.h2 
 SINGLEHEADER_OUT=stt-sav.h
 # binary serialisation module
@@ -19,6 +19,8 @@ XY_OUT=XYArchiveDictionary.h
 # Files that are discrete files 
 EXTRAHEADER_H=
 EXTRAHEADER_CPP=example.h2
+INSPECT_H=
+INSPECT_CPP=inspect.h2
 OUTPUTDIR=../
 OUTPUTDIR_STTR=../vgui_sttr/
 TEMPDIR=temp/
@@ -36,6 +38,7 @@ OPAGES_OUT=$(OUTPUTDIR)$(PAGES_OUT)
 OXY_OUT=$(OUTPUTDIR)$(XY_OUT)
 OBINVAL_OUT=$(OUTPUTDIR)$(BINVAL_OUT)
 OEXTRAHEADER_OUT=$(addprefix $(OUTPUTDIR), $(EXTRAHEADER_H:.h2=.h)) $(addprefix $(OUTPUTDIR), $(EXTRAHEADER_CPP:.h2=.cpp))
+OINSPECT_OUT=$(addprefix $(OUTPUTDIR), $(INSPECT_H:.h2=.h)) $(addprefix $(OUTPUTDIR), $(INSPECT_CPP:.h2=.cpp))
 
 ########################################################################
 # Phoney Rules
@@ -45,7 +48,7 @@ all:
 #	$(MAKE) sttr
 
 .PHONY: all_base
-all_base: $(OSINGLEHEADER_OUT) $(OEXTRAHEADER_OUT) $(OPAGES_OUT) $(OXY_OUT) $(OBINVAL_OUT) $(OUTPUTDIR)
+all_base: $(OSINGLEHEADER_OUT) $(OEXTRAHEADER_OUT) $(OINSPECT_OUT) $(OPAGES_OUT) $(OXY_OUT) $(OBINVAL_OUT) $(OUTPUTDIR)
 	@echo Done
 
 .PHONY: sttr

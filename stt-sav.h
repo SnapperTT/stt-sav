@@ -181,6 +181,9 @@ public:
 	
 	// printf's to stdout this dictonary
 	virtual void dbgDump() const {}
+	
+	// used for serialising dictionary type
+	virtual const char* getDictionaryName() const { return "ArchiveDictionaryI"; }
 	};
 	
 
@@ -1033,7 +1036,7 @@ namespace sttSav
 		for (uint32_t i = 0; i < mLookup.size(); ++i) {
 			if (mLookup[i].ptr) {
 				if (archivesOut && numArchivesOut < maxArchivesOut) {
-					archivesOut[numArchivesOut] = mLookup[i].aid;
+					archivesOut[numArchivesOut] = mLookup[i].ptr->aid;
 					numArchivesOut++;
 					}
 				workingCount++;
@@ -1949,6 +1952,7 @@ namespace sttSav
 {
   ArchiveFile * ArchiveManager::getLazy (archiveId const aid)
                                                   {
+		if (aid.value == 0) return NULL;
 		if (aid.value > mArchives.size())
 			return NULL;
 		return mArchives[aid.value - 1];

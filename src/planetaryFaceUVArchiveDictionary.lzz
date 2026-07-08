@@ -246,6 +246,8 @@ public:
 		mLookup.insertLookup(n);
 		isInitialised = true;
 		}
+		
+	const char* getDictionaryName() const { return "PlanetaryFaceUVArchiveDictionary"; }
 
 	archiveKey buildKey(const uint16_t planet, const uint8_t face, const uint8_t flags, const uint8_t localU, const uint8_t localV) const {
 		return unpackedKey(planet, face, flags, localU, localV).buildKey();
@@ -275,13 +277,19 @@ public:
 		STTSAV_STRING r;
 		StringEncoder enc(r);
 		BinaryWriter w(&enc);
+		w.StartObject();
+		w.Key("dictionaryType");
+		w.String(getDictionaryName());
+		w.Key("dictionary");
 		root.encode(w);
+		w.EndObject();
 		return r;
 		}
 	
 	uint32_t decodeDictionary(const STTSAV_STRING& data) {
 		StringDecoder d(data);
-		BinaryValue v(&d);
+		BinaryValue vv(&d);
+		BinaryValue v = vv["dictionary"];
 		root.destroyChildren();
 		root.decode(v);
 		uint32_t unused = 0;

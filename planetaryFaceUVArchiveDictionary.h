@@ -109,6 +109,7 @@ namespace sttSav
     PlanetaryFaceUVArchiveDictionary ();
     ~ PlanetaryFaceUVArchiveDictionary ();
     void initNewDictionary ();
+    char const * getDictionaryName () const;
     archiveKey buildKey (uint16_t const planet, uint8_t const face, uint8_t const flags, uint8_t const localU, uint8_t const localV) const;
     archiveId getArchiveId (archiveKey const key) const;
     bool archiveContains (archiveId const aid, archiveKey const key) const;
@@ -349,6 +350,11 @@ namespace sttSav
 }
 namespace sttSav
 {
+  char const * PlanetaryFaceUVArchiveDictionary::getDictionaryName () const
+                                              { return "PlanetaryFaceUVArchiveDictionary"; }
+}
+namespace sttSav
+{
   archiveKey PlanetaryFaceUVArchiveDictionary::buildKey (uint16_t const planet, uint8_t const face, uint8_t const flags, uint8_t const localU, uint8_t const localV) const
                                                                                                                                               {
 		return unpackedKey(planet, face, flags, localU, localV).buildKey();
@@ -396,7 +402,12 @@ namespace sttSav
 		STTSAV_STRING r;
 		StringEncoder enc(r);
 		BinaryWriter w(&enc);
+		w.StartObject();
+		w.Key("dictionaryType");
+		w.String(getDictionaryName());
+		w.Key("dictionary");
 		root.encode(w);
+		w.EndObject();
 		return r;
 		}
 }
@@ -405,7 +416,8 @@ namespace sttSav
   uint32_t PlanetaryFaceUVArchiveDictionary::decodeDictionary (STTSAV_STRING const & data)
                                                              {
 		StringDecoder d(data);
-		BinaryValue v(&d);
+		BinaryValue vv(&d);
+		BinaryValue v = vv["dictionary"];
 		root.destroyChildren();
 		root.decode(v);
 		uint32_t unused = 0;

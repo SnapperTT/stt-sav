@@ -63,6 +63,7 @@ public:
 		
 	
 	ArchiveFile* getLazy(const archiveId aid) {
+		if (aid.value == 0) return NULL;
 		if (aid.value > mArchives.size())
 			return NULL;
 		return mArchives[aid.value - 1];

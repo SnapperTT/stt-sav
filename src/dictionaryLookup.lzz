@@ -51,7 +51,6 @@ public:
 		return l.aid;
 		}
 		
-	
 	archiveId getArchiveId(const archiveKey key, NODE* root) const {
 		// Searches the entire tree for an archive for a specified key
 		NODE* n = lookup(root, key);
@@ -115,7 +114,7 @@ public:
 		for (uint32_t i = 0; i < mLookup.size(); ++i) {
 			if (mLookup[i].ptr) {
 				if (archivesOut && numArchivesOut < maxArchivesOut) {
-					archivesOut[numArchivesOut] = mLookup[i].aid;
+					archivesOut[numArchivesOut] = mLookup[i].ptr->aid;
 					numArchivesOut++;
 					}
 				workingCount++;

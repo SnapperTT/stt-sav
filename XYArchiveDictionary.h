@@ -64,6 +64,7 @@ namespace sttSav
     XYArchiveDictionary ();
     ~ XYArchiveDictionary ();
     void initNewDictionary ();
+    char const * getDictionaryName () const;
     archiveKey buildKey (int16_t const x, int16_t const y) const;
     archiveId getArchiveId (archiveKey const key) const;
     bool archiveContains (archiveId const aid, archiveKey const key) const;
@@ -258,6 +259,11 @@ namespace sttSav
 }
 namespace sttSav
 {
+  char const * XYArchiveDictionary::getDictionaryName () const
+                                              { return "XYArchiveDictionary"; }
+}
+namespace sttSav
+{
   archiveKey XYArchiveDictionary::buildKey (int16_t const x, int16_t const y) const
                                                                     {
 		return unpackedKey(x, y).buildKey();
@@ -305,7 +311,12 @@ namespace sttSav
 		STTSAV_STRING r;
 		StringEncoder enc(r);
 		BinaryWriter w(&enc);
+		w.StartObject();
+		w.Key("dictionaryType");
+		w.String(getDictionaryName());
+		w.Key("dictionary");
 		root.encode(w);
+		w.EndObject();
 		return r;
 		}
 }
@@ -314,7 +325,8 @@ namespace sttSav
   uint32_t XYArchiveDictionary::decodeDictionary (STTSAV_STRING const & data)
                                                              {
 		StringDecoder d(data);
-		BinaryValue v(&d);
+		BinaryValue vv(&d);
+		BinaryValue v = vv["dictionary"];
 		root.destroyChildren();
 		root.decode(v);
 		uint32_t unused = 0;
