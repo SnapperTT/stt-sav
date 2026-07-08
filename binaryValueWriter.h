@@ -254,7 +254,9 @@ namespace sttSav
     uint32_t getJumpSize () const;
     uint32_t getMemberCount () const;
     uint64_t childOffset () const;
+  public:
     uint64_t nextOffset () const;
+  protected:
     int64_t getInteger () const;
     double getFloating () const;
   public:
@@ -399,6 +401,7 @@ namespace sttSav
 {
   LZZ_INLINE uint64_t BinaryValue::nextOffset () const
                                            {
+		// gets the offset of the next data value after this
 		switch (getBvType()) {
 			case bvConstants::BV_BOOL:
 			case bvConstants::BV_UINT8:
@@ -431,7 +434,7 @@ namespace sttSav
 				return offset + getJumpSize();
 
 			default:
-				STTSAV_ASSERT(false);
+				//STTSAV_ASSERT(false);
 				return offset;
 			}
 		}

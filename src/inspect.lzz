@@ -30,11 +30,13 @@ enum PreviewType {
 	};
 	
 struct RecordPreview {
-	PreviewType type = PREVIEW_BLOB;
+	PreviewType type;
 	STTSAV_STRING blob;
 	sttSav::BinaryValue binaryValue;
 	STTSAV_STRING ascii;
 	STTSAV_STRING utf8;
+	
+	RecordPreview() : type(PREVIEW_BLOB) {}
 	};
 
 struct ArchiveEntry {
@@ -44,6 +46,7 @@ struct ArchiveEntry {
 
 struct ArchivePreview {
 	STTSAV_VECTOR<sttSav::recordInfo> records;
+	STTSAV_VECTOR<RecordPreview*> recordPreviews;
 	uint64_t totalBytes;
 	uint64_t wastedBytes;
 	uint64_t fileLength;
@@ -51,6 +54,12 @@ struct ArchivePreview {
 	bool isArchive;
 	
 	inline ArchivePreview() : totalBytes(0), wastedBytes(0), fileLength(0), isArchive(false) {}
+	
+	~ArchivePreview() {
+		for (RecordPreview* P : recordPreviews)
+			delete P;
+		recordPreviews.clear();
+		}
 	};
 
 enum UiMode {
@@ -85,6 +94,62 @@ struct Result {
 	inline Result() : type(JOB_UNKOWN), generation(0), aid({0}), success(0) {}
 	};
 
+	
+void processPreview(RecordPreview& preview) {
+	preview.type = PREVIEW_BLOB;
+
+	const STTSAV_STRING& blob = preview.blob;
+
+	if (blob.empty())
+		return;
+
+	using namespace sttSav;
+	StringDecoder d(blob);
+	BinaryValue bv(&d);
+	
+	// test array or object
+	if (blob.size() >= 5) {
+		if (bv.nextOffset() == blob.size()) {
+			if (bv.IsArray()) {
+				// test if (bv.next is end of stream)
+				preview.type = PREVIEW_BINARY_VALUE;
+				preview.binaryValue = bv;
+				preview.binaryValue.dec = NULL;
+				return;
+				}
+			else if (bv.IsObject()) {
+				preview.type = PREVIEW_BINARY_VALUE;
+				preview.binaryValue = bv;
+				preview.binaryValue.dec = NULL;
+				return;
+				}
+			}
+		}
+	
+
+	// ASCII?
+	bool ascii = true;
+	for (unsigned char c : blob) {
+		// Printable ASCII plus common whitespace.
+		if (c == '\n' ||
+			c == '\r' ||
+			c == '\t')
+			continue;
+		if (c < 32 || c > 126) {
+			ascii = false;
+			break;
+			}
+		}
+	if (ascii) {
+		preview.type = PREVIEW_ASCII;
+		preview.ascii = blob;
+		return;
+		}
+
+	// Fallback
+	preview.type = PREVIEW_BLOB;
+	}
+	
 bool loadPreview(sttSav::ArchiveManager* AM, const STTSAV_STRING& manualFilename, const sttSav::archiveId aid, ArchivePreview& preview) {
 	// Loads a preview
 	preview.records.clear();
@@ -103,12 +168,14 @@ bool loadPreview(sttSav::ArchiveManager* AM, const STTSAV_STRING& manualFilename
 			}
 
 		preview.records = archive->records;
+		preview.recordPreviews.resize(preview.records.size(), NULL);
 
 		for (const sttSav::recordInfo& r : preview.records)
 			preview.totalBytes += r.length;
 
 		preview.wastedBytes = archive->wastedBytes;
 		preview.fileLength = archive->fileLength;
+		preview.isArchive = true;
 		}
 	else {
 		sttSav::FileHandle f;
@@ -126,18 +193,17 @@ bool loadPreview(sttSav::ArchiveManager* AM, const STTSAV_STRING& manualFilename
 
 		f.close();
 		preview.isArchive = false;
-
-		// TODO:
-		// Try to classify preview.preview.blob as:
-		//
-		//   PREVIEW_BINARY_VALUE
-		//   PREVIEW_ASCII
-		//   PREVIEW_UTF8
-		//   PREVIEW_BLOB
-		//
-		// For now treat everything as a binary blob.
-		preview.preview.type = PREVIEW_BLOB;
+		processPreview(preview.preview);
 		}
+	return true;
+	}
+	
+bool loadRecord(sttSav::ArchiveManager& AM, const sttSav::archiveKey key,  const sttSav::recordId record, RecordPreview& preview) {
+	preview = RecordPreview();
+	if (!AM.loadRecord(key, record, preview.blob))
+		return false;
+
+	processPreview(preview);
 	return true;
 	}
 
@@ -265,6 +331,11 @@ struct JobThread {
 		data->main_impl();
 		}
 	};
+	
+enum FocusPane {
+    FOCUS_LEFT,
+    FOCUS_RIGHT
+};
 
 #end
 
@@ -380,7 +451,7 @@ int main(int argc, char** argv) {
 	// Queue initial preview.
 	if (!archives.empty()) {
 		previewLoading = true;
-		jThread.queuePreview( &archiveManager, "", archives[selectedArchive].aid, ++previewGeneration);
+		jThread.queuePreview( &archiveManager, archives[selectedArchive].filename, archives[selectedArchive].aid, ++previewGeneration);
 		}
 	
 	// Used to truncate "archive-test/" from every directory
@@ -389,6 +460,8 @@ int main(int argc, char** argv) {
 	// Launch the FTXUI interface.
 	{ // FTXUI Loop Begin
 	using namespace ftxui;
+
+	FocusPane focus = FOCUS_LEFT;
 
 	std::vector<std::string> archiveNames;
 	for (const ArchiveEntry& a : archives) {
@@ -423,7 +496,6 @@ int main(int argc, char** argv) {
 
 	// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// Render
-	
 	auto previewRenderer = Renderer([&] {
 		if (mode == UI_ARCHIVES) {
 			if (archives.empty())
@@ -455,33 +527,93 @@ int main(int argc, char** argv) {
 			}
 
 		// Record view.
-		if (currentPreview.records.empty())
-			return text("Archive contains no records.");
-
-		const sttSav::recordInfo& r = currentPreview.records[selectedRecord];
-
-		char buff[256];
+		const RecordPreview* rp = NULL;
 		Elements elems;
 
-		elems.push_back(text("Record Preview") | bold);
-		elems.push_back(separator());
-		snprintf(buff,sizeof(buff),"Key    : 0x%08X", (unsigned)r.key.value);
-		elems.push_back(text(buff));
-		snprintf(buff,sizeof(buff),"Record : 0x%08X", (unsigned)r.record.value);
-		elems.push_back(text(buff));
-		snprintf(buff,sizeof(buff),"Offset : %u", (unsigned)r.offset);
-		elems.push_back(text(buff));
-		snprintf(buff,sizeof(buff),"Length : %u", (unsigned)r.length);
-		elems.push_back(text(buff));
+		if (currentPreview.isArchive) {
+			if (currentPreview.records.empty())
+				return text("Archive contains no records.");
 
-		elems.push_back(separator());
+			if (selectedRecord >= 0 || selectedRecord < (int)currentPreview.records.size()) {
+				const sttSav::recordInfo& r = currentPreview.records[selectedRecord];
 
-		snprintf(buff, sizeof(buff), "payload of offset %u and length %u", (unsigned)r.offset, (unsigned)r.length);
+				char buff[256];
+				elems.push_back(text("Record Preview") | bold);
+				elems.push_back(separator());
+				snprintf(buff,sizeof(buff),"Key    : 0x%08X", (unsigned)r.key.value);
+				elems.push_back(text(buff));
+				snprintf(buff,sizeof(buff),"RecordId : 0x%08X", (unsigned)r.record.value);
+				elems.push_back(text(buff));
+				snprintf(buff,sizeof(buff),"Offset : %u", (unsigned)r.offset);
+				elems.push_back(text(buff));
+				snprintf(buff,sizeof(buff),"Length : %u", (unsigned)r.length);
+				elems.push_back(text(buff));
+				elems.push_back(separator());
+				rp = currentPreview.recordPreviews[selectedRecord]; // populated by previewRecord()
+				}
+			}
+		else {
+			char buff[256];
+			elems.push_back(text("File Preview") | bold);
+			elems.push_back(separator());
+			snprintf(buff,sizeof(buff),"Length : %u", (unsigned)currentPreview.preview.blob.size());
+			elems.push_back(text(buff));
+			elems.push_back(separator());
+			rp = &currentPreview.preview;
+			}
+		
+		if (rp) {
+			switch (rp->type) {
+				case PREVIEW_BINARY_VALUE:
+					{
+					elems.push_back(text("<sttSav::BinaryValue>"));
+					
+					StringDecoder d(rp->blob);
+					BinaryValue bv = rp->binaryValue;
+					bv.dec = &d;
+					
+					STTSAV_STRING str = bv.toDbgString();
+					
+					elems.push_back(text(str.c_str()));
+					}
+					break;
 
-		elems.push_back(text(buff));
+				case PREVIEW_ASCII:
+					elems.push_back(text("<ascii>"));
+					elems.push_back(separator());
+					elems.push_back(paragraph(rp->ascii));
+					break;
+				case PREVIEW_UTF8:
+					elems.push_back(text("<utf8>"));
+					elems.push_back(separator());
+					elems.push_back(paragraph(rp->utf8));
+					break;
+				case PREVIEW_BLOB:
+				default: {
+					elems.push_back(text("<blob>"));
+					elems.push_back(separator());
+					std::string hex;
+					static const char lut[] = "0123456789abcdef";
 
+					const STTSAV_STRING& blob = rp->blob;
+					
+					for (size_t i = 0; i < blob.size(); ++i) {
+						if (i && (i % 32) == 0)
+							hex += '\n';
+						else if (i && (i % 32) != 0)
+							hex += ' ';
+						unsigned char c = (unsigned char)blob[i];
+						hex += lut[c >> 4];
+						hex += lut[c & 15];
+						}
+					
+					elems.push_back(paragraph(hex));
+					break;
+					}
+				}
+			}
 		return vbox(std::move(elems));
-	});
+		});
 
 	auto statusBar = Renderer([&] {
 		char left[256];
@@ -494,7 +626,7 @@ int main(int argc, char** argv) {
 			snprintf(right, sizeof(right), "Enter Open   q Quit");
 			}
 		else {
-			if (selectedRecord < currentPreview.records.size()) {
+			if (selectedRecord < (int)currentPreview.records.size() && selectedRecord >= 0) {
 				const auto& r = currentPreview.records[selectedRecord];
 				snprintf(left, sizeof(left), "Key=%u (0x%08X)  Record=%u (0x%08X)", r.key.value, r.key.value, r.record.value, r.record.value);
 				snprintf(right, sizeof(right), "%u/%u   <- Back   q Quit", selectedRecord + 1, (unsigned)currentPreview.records.size());
@@ -534,16 +666,16 @@ int main(int argc, char** argv) {
 		Element leftPane;
 
 		if (mode == UI_ARCHIVES)
-			leftPane = window(text("Archives"), archiveMenu->Render());
+			leftPane = window(text(focus == FOCUS_LEFT ? ">Archives" : "Archives"), archiveMenu->Render() | vscroll_indicator | frame );
 		else
-			leftPane = window(text("Records"), recordMenu->Render());
+			leftPane = window(text(focus == FOCUS_LEFT ? ">Archives" : "Archives"), recordMenu->Render() | vscroll_indicator | frame);
 
 
 		return vbox({
 			topBar->Render(),
 			hbox({
 				std::move(leftPane),
-				window(text("Preview"), previewRenderer->Render()) | flex,
+				window(text(focus == FOCUS_RIGHT ? ">Preview" : "Preview"), previewRenderer->Render() | vscroll_indicator | frame ) | flex,
 			}) | flex,
 			statusBar->Render(),
 		});
@@ -569,12 +701,22 @@ int main(int argc, char** argv) {
 
 		if (mode == UI_ARCHIVES && selectedArchive != oldArchive) {
 			previewLoading = true;
-			jThread.queuePreview( &archiveManager, "", archives[selectedArchive].aid, ++previewGeneration);
+			jThread.queuePreview( &archiveManager, archives[selectedArchive].filename, archives[selectedArchive].aid, ++previewGeneration);
 			}
 
 		if (mode == UI_RECORDS && selectedRecord != oldRecord) {
-			// TODO:
-			// Later this will queue a record preview job.
+			if (selectedRecord >= 0 && selectedRecord < (int)currentPreview.records.size()) {
+				const sttSav::recordInfo& r = currentPreview.records[selectedRecord];
+				if (!currentPreview.recordPreviews[selectedRecord])
+					currentPreview.recordPreviews[selectedRecord] = STTSAV_NEW(RecordPreview);
+				loadRecord(archiveManager, r.key, r.record, *currentPreview.recordPreviews[selectedRecord]);
+				}
+			}
+		
+		// Switch pane	
+		if (event == Event::Tab) {
+			focus = (focus == FOCUS_LEFT) ? FOCUS_RIGHT : FOCUS_LEFT;
+			return true;
 			}
 
 		// Enter archive.

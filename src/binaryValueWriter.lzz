@@ -65,7 +65,9 @@ protected:
 		return payloadOffset() + sizeof(uint32_t) * 2;
 		}
 
+public:
 	inline uint64_t nextOffset() const {
+		// gets the offset of the next data value after this
 		switch (getBvType()) {
 			case bvConstants::BV_BOOL:
 			case bvConstants::BV_UINT8:
@@ -98,11 +100,12 @@ protected:
 				return offset + getJumpSize();
 
 			default:
-				STTSAV_ASSERT(false);
+				//STTSAV_ASSERT(false);
 				return offset;
 			}
 		}
 
+protected:
 	int64_t getInteger() const {
 		STTSAV_ASSERT(IsValid());
 		STTSAV_ASSERT(IsNumber());
