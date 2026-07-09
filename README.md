@@ -2,8 +2,8 @@ sttSav is a C++ lightweight header only region based save file library.
 
 Used in the upcoming title [Turf2](https://turf2.net).
 
-![Save Viewer](saveViewer1.png)
-![Save Viewer](saveViewer2.png)
+![Save Viewer](images/saveViewer1.png)
+![Save Viewer](images/saveViewer2.png)
 
 
 # Features
@@ -13,6 +13,7 @@ Used in the upcoming title [Turf2](https://turf2.net).
 * Both Simple and Bulk api for writing records
 * Lazy loading. Files are only opened when needed.
 * (optional) - binary json style encoding/decoding, using rapidjson style api. You can trivially write a json <-> stt-sav record convertor
+* A save file viewer
 
 # Concepts
 sttSav works with Dictionaries, Archives, Keys and Records.
