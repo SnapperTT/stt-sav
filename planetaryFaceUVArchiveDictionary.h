@@ -127,6 +127,14 @@ namespace sttSav
 }
 namespace sttSav
 {
+  struct T2PlanetaryFaceUVArchiveDictionary : public PlanetaryFaceUVArchiveDictionary
+  {
+    char const * getDictionaryName () const;
+    void getArchiveFilename (sttSav::archiveId const id, char * nameOut, uint32_t & lenOut, uint32_t const maxLen) const;
+  };
+}
+namespace sttSav
+{
   LZZ_INLINE PlanetaryFaceUVArchiveDictionary::unpackedKey::unpackedKey ()
     : planet (0), face (0), flags (0), localU (0), localV (0)
                                                                                           {}
@@ -644,6 +652,57 @@ namespace sttSav
 {
   void PlanetaryFaceUVArchiveDictionary::dbgDump () const
                              { root.dumpNode(0); }
+}
+namespace sttSav
+{
+  char const * T2PlanetaryFaceUVArchiveDictionary::getDictionaryName () const
+                                              { return "T2PlanetaryFaceUVArchiveDictionary"; }
+}
+namespace sttSav
+{
+  void T2PlanetaryFaceUVArchiveDictionary::getArchiveFilename (sttSav::archiveId const id, char * nameOut, uint32_t & lenOut, uint32_t const maxLen) const
+                                                                                                                          {
+		// Additional semantics - planet0 is "global data"
+		using namespace sttSav;
+		node* n = mLookup.getNodeByArchiveId(id);
+		switch (n->type) {
+			case PUVADictConstants::NODE_TYPE_PLANET_REMAINDER: 
+				lenOut = snprintf(nameOut, maxLen, "planet-r.sav");
+				return;
+			case PUVADictConstants::NODE_TYPE_PLANET: 
+				if (n->planet == 0)
+					lenOut = snprintf(nameOut, maxLen, "global.sav");
+				else
+					lenOut = snprintf(nameOut, maxLen, "planet-%i.sav", (int)n->planet);
+				return;
+			case PUVADictConstants::NODE_TYPE_FACE: 
+				{
+				if (n->planet == 0) {
+					if (n->face == PUVADictConstants::GLOBAL_FACE)
+						lenOut = snprintf(nameOut, maxLen, "global-g.sav");
+					else
+						lenOut = snprintf(nameOut, maxLen, "global-%i.sav", (int)n->face);
+					}
+				else {
+					if (n->face == PUVADictConstants::GLOBAL_FACE)
+						lenOut = snprintf(nameOut, maxLen, "planet-%i-face-g.sav", (int)n->planet);
+					else
+						lenOut = snprintf(nameOut, maxLen, "planet-%i-face-%i.sav", (int)n->planet, (int)n->face);
+					}
+				}
+				return;
+			case PUVADictConstants::NODE_TYPE_LEAF: 
+				{
+				if (n->planet == 0)
+					lenOut = snprintf(nameOut, maxLen, "global-%i-sz%i-u%i-v%i.sav", (int)n->face, n->uvSize, n->u, n->v);
+				else
+					lenOut = snprintf(nameOut, maxLen, "planet-%i-face-%i-sz%i-u%i-v%i.sav", (int)n->planet, (int)n->face, n->uvSize, n->u, n->v);
+				}
+				return;
+			default:
+				STTSAV_ASSERT(false);
+			}
+		}
 }
 #undef LZZ_INLINE
 #undef LZZ_OVERRIDE

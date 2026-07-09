@@ -257,7 +257,9 @@ int main (int argc, char * * argv)
 	StringDecoder dec(dictionaryBlob);
 	BinaryValue root(&dec);
 
-	STTSAV_STRING dictionaryType = root["dictionaryType"].GetString();
+	STTSAV_STRING dictionaryType;
+	if (root.HasMember("dictionaryType"))
+		dictionaryType = root["dictionaryType"].GetString();
 	printf("Dictionary: %s\n", dictionaryType.c_str());
 
 	// Create dictionary.
@@ -267,17 +269,20 @@ int main (int argc, char * * argv)
 		dictionary = STTSAV_NEW(XYArchiveDictionary);
 	else if (dictionaryType == "PlanetaryFaceUVArchiveDictionary")
 		dictionary = STTSAV_NEW(PlanetaryFaceUVArchiveDictionary);
+	else if (dictionaryType == "T2PlanetaryFaceUVArchiveDictionary")
+		dictionary = STTSAV_NEW(T2PlanetaryFaceUVArchiveDictionary);
 
 	if (!dictionary) {
 		printf("Error: Unknown dictionary type '%s'\n", dictionaryType.c_str());
 		return 1;
 		}
 
-	if (!dictionary->decodeDictionary(dictionaryBlob)) {
-		printf("Error: Failed to decode dictionary.\n");
-		STTSAV_DEL(dictionary, sizeof(*dictionary));
-		return 1;
-		}
+	dictionary->decodeDictionary(dictionaryBlob); //decodeDictionary returns number of records
+	//if (!dictionary->decodeDictionary(dictionaryBlob)) {
+	//	printf("Error: Failed to decode dictionary.\n");
+	//	STTSAV_DEL(dictionary, sizeof(*dictionary));
+	//	return 1;
+	//	}
 
 	// Initialise ArchiveManager.
 	ArchiveManager archiveManager(dictionary);
