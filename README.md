@@ -2,6 +2,10 @@ sttSav is a C++ lightweight header only region based save file library.
 
 Used in the upcoming title [Turf2](https://turf2.net).
 
+![Save Viewer](saveViewer1.png)
+![Save Viewer](saveViewer2.png)
+
+
 # Features
 * File size and location based partitioning of data. No file gets too big and we don't spam lots of small files
 * Crash resisistant writing. We use append only writing of records. Old records are only removed when new records have finished writing. Compaction is done on files to remove dead records and clean up metadata - new file is written and old is swapped out atomically.

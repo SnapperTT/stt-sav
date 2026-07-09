@@ -329,6 +329,7 @@ int main (int argc, char * * argv)
 	using namespace ftxui;
 
 	FocusPane focus = FOCUS_LEFT;
+	float previewScroll = 0.f;
 
 	std::vector<std::string> archiveNames;
 	for (const ArchiveEntry& a : archives) {
@@ -497,23 +498,80 @@ int main (int argc, char * * argv)
 				}
 			}
 
-		return hbox({ text(left), filler(), text(right), }) | border;
+		return hbox({ text(left), filler(), text(right), });// | border;
 	});
 
-	auto archiveContainer = Container::Horizontal({
+	auto leftContainer = Container::Tab({
 		archiveMenu,
-		previewRenderer,
-	});
-
-	auto recordContainer = Container::Horizontal({
 		recordMenu,
+	}, reinterpret_cast<int*>(&mode));
+	
+
+	const float previewScrollIncr = 0.05f;
+	
+	previewRenderer |= CatchEvent([&](Event event) {
+		if (event == Event::ArrowUp) {
+			previewScroll -= previewScrollIncr;
+			if (previewScroll < 0.0f)
+				previewScroll = 0.0f;
+			return true;
+			}
+
+		if (event == Event::ArrowDown) {
+			previewScroll += previewScrollIncr;
+			if (previewScroll > 1.0f)
+				previewScroll = 1.0f;
+			return true;
+			}
+
+		if (event == Event::PageUp) {
+			previewScroll -= previewScrollIncr*16;
+			if (previewScroll < 0.0f)
+				previewScroll = 0.0f;
+			return true;
+			}
+
+		if (event == Event::PageDown) {
+			previewScroll += previewScrollIncr*16;
+			if (previewScroll > 1.0f)
+				previewScroll = 1.0f;
+			return true;
+			}
+
+		if (event == Event::Home) {
+			previewScroll = 0.0f;
+			return true;
+			}
+
+		if (event == Event::End) {
+			previewScroll = 1.0f;
+			return true;
+			}
+				
+		if (event.is_mouse()) {
+			const auto& mouse = event.mouse();
+
+			if (mouse.button == Mouse::WheelUp) {
+				previewScroll -= previewScrollIncr;
+				if (previewScroll < 0.0f)
+					previewScroll = 0.0f;
+				return true;
+				}
+
+			if (mouse.button == Mouse::WheelDown) {
+				previewScroll += previewScrollIncr;
+				if (previewScroll > 1.0f)
+					previewScroll = 1.0f;
+				return true;
+				}
+			}
+		return false;
+		});
+		
+	auto container = Container::Horizontal({
+		leftContainer,
 		previewRenderer,
 	});
-	
-	auto container = Container::Tab({
-			archiveContainer,
-			recordContainer,
-			}, reinterpret_cast<int*>(&mode));
 	
 	auto topBar = Renderer([&] {
 		STTSAV_STRING title;
@@ -523,32 +581,43 @@ int main (int argc, char * * argv)
 		else
 			title = archives[selectedArchive].filename;
 
-		return text(title) | border;
+		return text(title) ;//| border;
 	});
 		
 	auto root = Renderer(container, [&] {
 		Element leftPane;
 
-		if (mode == UI_ARCHIVES)
-			leftPane = window(text(focus == FOCUS_LEFT ? ">Archives" : "Archives"), archiveMenu->Render() | vscroll_indicator | frame );
-		else
-			leftPane = window(text(focus == FOCUS_LEFT ? ">Archives" : "Archives"), recordMenu->Render() | vscroll_indicator | frame);
-
-
-		return vbox({
-			topBar->Render(),
-			hbox({
-				std::move(leftPane),
-				window(text(focus == FOCUS_RIGHT ? ">Preview" : "Preview"), previewRenderer->Render() | vscroll_indicator | frame ) | flex,
-			}) | flex,
-			statusBar->Render(),
-		});
+		if (focus == FOCUS_LEFT) {
+			leftPane = window(
+					text(mode == UI_ARCHIVES ? " Archives " : " Records "),
+					leftContainer->Render() | vscroll_indicator | frame
+				);
+			}
+		
+		Element rightPane = window( text(" Preview "),
+			previewRenderer->Render() | focusPositionRelative(0.f, previewScroll) | vscroll_indicator  | frame 
+			);
+				
+		if (focus == FOCUS_LEFT) {
+			return vbox({
+				topBar->Render(),
+				hbox({ std::move(leftPane), std::move(rightPane) | flex, }) | flex,
+				statusBar->Render(),
+			});
+			}
+		else {
+			return vbox({
+				topBar->Render(),
+				hbox({	std::move(rightPane) | flex, }) | flex ,
+				statusBar->Render(),
+			});
+			}
 	});
 
 	auto screen = ScreenInteractive::Fullscreen();
 
 	// /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	// Event handling
+	// Event handling	
 	root |= CatchEvent([&](Event event) {
 
 		if (event == Event::Escape || event == Event::Character('q')) {
@@ -559,7 +628,7 @@ int main (int argc, char * * argv)
 		const int oldArchive = selectedArchive;
 		const int oldRecord = selectedRecord;
 		
-		bool handled = (mode == UI_ARCHIVES) ? archiveContainer->OnEvent(event) : recordContainer->OnEvent(event);
+		bool handled = container->OnEvent(event);
 
 		if (mode == UI_ARCHIVES && selectedArchive != oldArchive) {
 			if (selectedArchive >= 0 && selectedArchive < (int)archives.size()) {
@@ -567,13 +636,6 @@ int main (int argc, char * * argv)
 					loadPreview(&archiveManager, archives[selectedArchive].filename, archives[selectedArchive].aid, currentPreview);
 				else
 					loadPreview(NULL, archives[selectedArchive].filename, archives[selectedArchive].aid, currentPreview);
-					
-				//if (selectedRecord >= 0 && selectedRecord < (int)currentPreview.records.size()) {
-				//	const sttSav::recordInfo& r = currentPreview.records[selectedRecord];
-				//	if (!currentPreview.recordPreviews[selectedRecord])
-				//		currentPreview.recordPreviews[selectedRecord] = STTSAV_NEW(RecordPreview);
-				//	loadRecord(archiveManager, r.key, r.record, *currentPreview.recordPreviews[selectedRecord]);
-				//	}
 				}
 			}
 
@@ -585,12 +647,6 @@ int main (int argc, char * * argv)
 					currentPreview.recordPreviews[selectedRecord] = STTSAV_NEW(RecordPreview);
 				loadRecord(archiveManager, r.key, r.record, *currentPreview.recordPreviews[selectedRecord]);
 				}
-			}
-		
-		// Switch pane	
-		if (event == Event::Tab) {
-			focus = (focus == FOCUS_LEFT) ? FOCUS_RIGHT : FOCUS_LEFT;
-			return true;
 			}
 
 		// Enter archive.
@@ -607,10 +663,19 @@ int main (int argc, char * * argv)
 				}
 			return true;
 			}
+		if ((event == Event::Return || event == Event::ArrowRight) && mode == UI_RECORDS) {
+			focus = FOCUS_RIGHT;
+			previewRenderer->TakeFocus();
+			return true;
+			}
 
 		// Leave archive.
 		if ((event == Event::ArrowLeft || event == Event::Backspace) && mode == UI_RECORDS) {
-			mode = UI_ARCHIVES;
+			if (focus == FOCUS_RIGHT)
+				focus = FOCUS_LEFT;
+			else
+				mode = UI_ARCHIVES;
+			leftContainer->TakeFocus();
 			rebuildLeftItems();
 			return true;
 			}

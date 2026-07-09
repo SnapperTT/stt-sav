@@ -295,6 +295,7 @@ namespace sttSav
     void ExtractArrayElements (BinaryValue * bvOut) const;
     bool HasMember (char const * key) const;
     STTSAV_STRING toDbgString () const;
+    STTSAV_STRING toDbgPrintableString (uint32_t const indent) const;
     STTSAV_STRING toDbgStringIndented (uint32_t indent) const;
   };
 }
@@ -1117,6 +1118,47 @@ namespace sttSav
 }
 namespace sttSav
 {
+  STTSAV_STRING BinaryValue::toDbgPrintableString (uint32_t const indent) const
+                                                                        {
+		STTSAV_STRING tmp = GetString();
+		if (!tmp.size())
+			return tmp;
+		
+		bool isAsci = true;
+		char* c_str = tmp.data();
+		while (*c_str) {
+			if (static_cast<unsigned char>(*c_str) > 127) {
+				isAsci = false;
+				break;
+				}
+			c_str++;
+			}
+		if (isAsci)
+			return tmp;
+		
+		STTSAV_STRING hex;
+		static const char lut[] = "0123456789abcdef";
+
+		for (uint32_t i = 0; i < tmp.size(); ++i) {
+			int i2 = i + 7;
+			if ((i2 % 32) == 0) {
+				hex += '\n';
+				for (uint32_t id = 0; id < indent; ++id) {
+					hex += "  ";
+					}
+				}
+			else if (i) {
+				hex += ' ';
+				}
+			unsigned char c = (unsigned char)tmp[i];
+			hex += lut[c >> 4];
+			hex += lut[c & 15];
+			}
+		return hex;
+		}
+}
+namespace sttSav
+{
   STTSAV_STRING BinaryValue::toDbgStringIndented (uint32_t indent) const
                                                                  {
 		// Prints a human readable debug string
@@ -1126,7 +1168,7 @@ namespace sttSav
 
 		auto doIndent = [&](uint32_t n) {
 			for (uint32_t i = 0; i < n; ++i)
-				out += "    ";
+				out += "  ";
 			};
 
 		if (!IsValid()) {
@@ -1184,7 +1226,7 @@ namespace sttSav
 				break;
 			case bvConstants::BV_STRING:
 				out += "(string) \"";
-				out += GetString();
+				out += toDbgPrintableString(indent);
 				out += "\"";
 				break;
 			case bvConstants::BV_ARRAY:

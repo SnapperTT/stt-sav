@@ -338,7 +338,19 @@ int main (int argc, char * * argv)
 			//	abort();
 			//	}
 			
-			d.blob = makeBlob();
+			//d.blob = makeBlob();
+			StringEncoder enc(d.blob);
+			BinaryWriter w(&enc);
+			
+			w.StartObject();
+				w.Key("chunkX");
+				w.Int(x);
+				w.Key("chunkY");
+				w.Int(y);
+				w.Key("blockData");
+				w.String(makeBlob());
+			w.EndObject();
+			
 			truth[c] = d;
 			};
 
