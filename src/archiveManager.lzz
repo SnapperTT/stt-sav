@@ -29,6 +29,25 @@ public:
 		clearArchives();
 		}
 		
+	void loadAllRecordInfo() {
+		for (ArchiveFile* a : mArchives) {
+			if (!a)
+				continue;
+			if (a->hasLoadedRecords)
+				continue;
+			a->loadRecords();
+			push_back_vector_unique(touchedArchives, a->aid);
+			}
+		closeOpenFiles();
+		}
+		
+	void unloadAllRecordInfo() {
+		for (ArchiveFile* a : mArchives) {
+			if (!a) continue;
+			a->unloadRecordInfo();
+			}
+		}
+		
 	void clearArchives() {
 		closeOpenFiles();
 		for (ArchiveFile* a : mArchives) {
@@ -57,6 +76,7 @@ public:
 		mDictionary->getArchiveFilename(aid, filename, len, sizeof(filename));
 
 		a->filename = FileOps::joinPath(mBasePath, filename);
+		a->filename.shrink_to_fit();
 		a->fileExists = FileOps::exists(a->filename.c_str());
 		return a;
 		}
@@ -150,6 +170,7 @@ protected:
 
 			dst->aid = aid;
 			dst->filename = newFilename;
+			dst->filename.shrink_to_fit();
 
 			if (isSameAsASource)
 				dst->filename += ".tmp";

@@ -43,6 +43,7 @@ public:
 	uint64_t fileLength;
 	uint64_t wastedBytes;
 	uint64_t lastDirectoryOffsetAddr;
+	uint32_t lastAccessTime;
 	FileHandle file;
     bool hasLoadedRecords;
     bool fileExists;
@@ -67,7 +68,15 @@ public:
 		mHeader.reserved = 0;
 		mHeader.directoryOffset = 0; // 0 => nullptr
 		}
-		
+	
+	void unloadRecordInfo() {
+		if (records.size()) {
+			records.clear();
+			records.shrink_to_fit();
+			hasLoadedRecords = false;
+			}
+		}
+	
 	void setFilename(const ArchiveManager& AM) {
 		char buff[1024];
 		uint32_t len = 0;

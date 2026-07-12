@@ -1183,6 +1183,7 @@ namespace sttSav
     uint64_t fileLength;
     uint64_t wastedBytes;
     uint64_t lastDirectoryOffsetAddr;
+    uint32_t lastAccessTime;
     FileHandle file;
     bool hasLoadedRecords;
     bool fileExists;
@@ -1194,6 +1195,7 @@ namespace sttSav
     ArchiveFile & operator = (ArchiveFile const & other);
   public:
     void initHeader ();
+    void unloadRecordInfo ();
     void setFilename (ArchiveManager const & AM);
     uint32_t findRecord (recordId const id) const;
     uint32_t findPendingRecord (recordId const id, bool const isForward = true) const;
@@ -1260,6 +1262,17 @@ namespace sttSav
 		mHeader.version = archiveConstants::ARCHIVE_VERSION;
 		mHeader.reserved = 0;
 		mHeader.directoryOffset = 0; // 0 => nullptr
+		}
+}
+namespace sttSav
+{
+  void ArchiveFile::unloadRecordInfo ()
+                                {
+		if (records.size()) {
+			records.clear();
+			records.shrink_to_fit();
+			hasLoadedRecords = false;
+			}
 		}
 }
 namespace sttSav
@@ -1855,6 +1868,8 @@ namespace sttSav
     STTSAV_VECTOR <archiveId> touchedArchives;
     ArchiveManager (ArchiveDictionaryI * _mDictionary);
     ~ ArchiveManager ();
+    void loadAllRecordInfo ();
+    void unloadAllRecordInfo ();
     void clearArchives ();
     ArchiveFile * getOrCreate (archiveId const aid);
     ArchiveFile * getLazy (archiveId const aid);
@@ -1912,6 +1927,31 @@ namespace sttSav
 }
 namespace sttSav
 {
+  void ArchiveManager::loadAllRecordInfo ()
+                                 {
+		for (ArchiveFile* a : mArchives) {
+			if (!a)
+				continue;
+			if (a->hasLoadedRecords)
+				continue;
+			a->loadRecords();
+			push_back_vector_unique(touchedArchives, a->aid);
+			}
+		closeOpenFiles();
+		}
+}
+namespace sttSav
+{
+  void ArchiveManager::unloadAllRecordInfo ()
+                                   {
+		for (ArchiveFile* a : mArchives) {
+			if (!a) continue;
+			a->unloadRecordInfo();
+			}
+		}
+}
+namespace sttSav
+{
   void ArchiveManager::clearArchives ()
                              {
 		closeOpenFiles();
@@ -1944,6 +1984,7 @@ namespace sttSav
 		mDictionary->getArchiveFilename(aid, filename, len, sizeof(filename));
 
 		a->filename = FileOps::joinPath(mBasePath, filename);
+		a->filename.shrink_to_fit();
 		a->fileExists = FileOps::exists(a->filename.c_str());
 		return a;
 		}
@@ -2044,6 +2085,7 @@ namespace sttSav
 
 			dst->aid = aid;
 			dst->filename = newFilename;
+			dst->filename.shrink_to_fit();
 
 			if (isSameAsASource)
 				dst->filename += ".tmp";
