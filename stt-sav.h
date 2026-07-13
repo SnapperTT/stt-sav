@@ -1935,9 +1935,10 @@ namespace sttSav
 			if (a->hasLoadedRecords)
 				continue;
 			a->loadRecords();
-			push_back_vector_unique(touchedArchives, a->aid);
+			touchedArchives.push_back(a->aid);
 			}
-		closeOpenFiles();
+		if (!keepFilesOpen)
+			closeOpenFiles();
 		}
 }
 namespace sttSav
